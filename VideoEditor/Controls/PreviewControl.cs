@@ -11,7 +11,7 @@ using VideoEditor.Services;
 
 namespace VideoEditor.Controls
 {
-    public class PreviewControl : Control
+    public class PreviewControl : UserControl
     {
         private List<MediaItem> activeFrameItems = new List<MediaItem>();
         private List<MediaItem> allFrameItems = new List<MediaItem>();

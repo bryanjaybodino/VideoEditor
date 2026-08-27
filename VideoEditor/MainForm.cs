@@ -19,18 +19,14 @@ namespace VideoEditor
     public partial class MainForm : Form
     {
         private List<MediaItem> mediaItems = new List<MediaItem>();
-        private PreviewControl previewControl;
-        private TimelineControl timelineControl;
         private VideoExportService exportService;
         private AudioCaptionService captionService;
-        private ListBox mediaListBox;
 
         private Timer playbackTimer;
         private Stopwatch playbackStopwatch = new Stopwatch();
         private double playbackStartOffset = 0;
         private bool isPlaying = false;
         private bool isUserScrubbing = false;
-        private Button btnPlayPause;
 
         private MediaPlayer audioPlayer = new MediaPlayer();
         private string currentAudioPath = null;
@@ -38,29 +34,216 @@ namespace VideoEditor
         private Timer scrubAudioTimer;
         private double pendingScrubTime = -1;
 
-        private NumericUpDown numDuration;
-        private ComboBox cbInEffect;
-        private NumericUpDown numInDuration;
-        private ComboBox cbOutEffect;
-        private NumericUpDown numOutDuration;
-
-        // Sidebar styling fields
-        private NumericUpDown numFontSize;
-        private Button btnTextColor;
-        private Button btnBgColor;
-        private NumericUpDown numBoxWidth;
-        private NumericUpDown numBoxHeight;
-
         private bool isBindingUI = false;
 
         public MainForm()
         {
-            InitializeComponent();
             exportService = new VideoExportService();
             captionService = new AudioCaptionService();
 
-            InitializeUI();
+            InitializeComponent();
+
+            // Pass media list reference to custom timeline control after initialize
+            timelineControl.SetMediaItems(mediaItems);
+
+            WireUpEvents();
             InitializePlaybackEngine();
+        }
+
+        private void WireUpEvents()
+        {
+            // Toolbar Button Clicks
+            btnImport.Click += (s, e) => ImportFiles();
+            btnPlayPause.Click += (s, e) => TogglePlayback();
+            btnDelete.Click += (s, e) => DeleteSelectedMedia();
+            btnExport.Click += async (s, e) => await ExportVideoAsync();
+
+            // Editing Sidebar Clicks
+            btnSplit.Click += (s, e) => SplitSelectedClip();
+            btnSplitLeft.Click += (s, e) => SplitLeftSelectedClip();
+            btnSplitRight.Click += (s, e) => SplitRightSelectedClip();
+
+            btnAddText.Click += (s, e) =>
+            {
+                var newLabel = new TextLabel
+                {
+                    Content = "Type text here...",
+                    X = 100,
+                    Y = 200,
+                    Width = 350,
+                    Height = 90,
+                    FontSize = (float)numFontSize.Value,
+                };
+
+                var textMediaItem = new MediaItem
+                {
+                    Type = MediaType.Text,
+                    StartTime = timelineControl.CurrentTime,
+                    Duration = 3.0,
+                    TextData = newLabel
+                };
+
+                mediaItems.Add(textMediaItem);
+                mediaListBox.Items.Add($"Text: {newLabel.Content}");
+                previewControl.SelectedTextLabel = newLabel;
+                RefreshTimeline();
+            };
+
+            // Sidebar Property Change Handlers
+            numFontSize.ValueChanged += (s, e) =>
+            {
+                if (!isBindingUI && previewControl.SelectedTextLabel != null)
+                {
+                    previewControl.SelectedTextLabel.FontSize = (float)numFontSize.Value;
+                    previewControl.Invalidate();
+                }
+            };
+
+            btnTextColor.Click += (s, e) => PickColor(Color.White, c =>
+            {
+                if (previewControl.SelectedTextLabel != null)
+                {
+                    previewControl.SelectedTextLabel.TextColor = c;
+                    previewControl.Invalidate();
+                }
+            });
+
+            btnBgColor.Click += (s, e) => PickColor(Color.FromArgb(128, 0, 0, 0), c =>
+            {
+                if (previewControl.SelectedTextLabel != null)
+                {
+                    previewControl.SelectedTextLabel.BackgroundColor = c;
+                    previewControl.Invalidate();
+                }
+            });
+
+            numBoxWidth.ValueChanged += (s, e) =>
+            {
+                if (!isBindingUI && previewControl.SelectedTextLabel != null)
+                {
+                    previewControl.SelectedTextLabel.Width = (float)numBoxWidth.Value;
+                    previewControl.Invalidate();
+                }
+            };
+
+            numBoxHeight.ValueChanged += (s, e) =>
+            {
+                if (!isBindingUI && previewControl.SelectedTextLabel != null)
+                {
+                    previewControl.SelectedTextLabel.Height = (float)numBoxHeight.Value;
+                    previewControl.Invalidate();
+                }
+            };
+
+            numDuration.ValueChanged += NumDuration_ValueChanged;
+            cbInEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
+            numInDuration.ValueChanged += (s, e) => SaveAnimationSettings();
+            cbOutEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
+            numOutDuration.ValueChanged += (s, e) => SaveAnimationSettings();
+
+            // Timeline & Preview Controls Events
+            timelineControl.TimeChanged += (time) =>
+            {
+                previewControl.RenderFrame(mediaItems, time);
+
+                if (isUserScrubbing || !isPlaying)
+                {
+                    pendingScrubTime = time;
+                    scrubAudioTimer.Stop();
+                    scrubAudioTimer.Start();
+                }
+            };
+
+            timelineControl.ClipSelected += (selectedItem) =>
+            {
+                previewControl.SelectedItem = selectedItem;
+                BindSelectedMediaToUI(selectedItem);
+                if (selectedItem?.Type == MediaType.Text && selectedItem.TextData != null)
+                {
+                    BindTextLabelToUI(selectedItem.TextData);
+                    previewControl.SelectedTextLabel = selectedItem.TextData;
+                }
+                previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
+            };
+
+            timelineControl.ItemResized += (resizedItem) =>
+            {
+                TimelineControl_ItemResized(timelineControl, resizedItem);
+            };
+
+            previewControl.TextLabelSelected += (label) =>
+            {
+                BindTextLabelToUI(label);
+            };
+
+            timelineControl.MouseDown += (s, e) =>
+            {
+                isUserScrubbing = true;
+                if (isPlaying) PausePlayback();
+            };
+
+            timelineControl.MouseUp += (s, e) =>
+            {
+                isUserScrubbing = false;
+                scrubAudioTimer.Stop();
+                ApplyAudioSeek(timelineControl.CurrentTime);
+            };
+        }
+
+        private void PickColor(Color initialColor, Action<Color> onColorPicked)
+        {
+            using (var cd = new ColorDialog { Color = initialColor })
+            {
+                if (cd.ShowDialog() == DialogResult.OK)
+                {
+                    onColorPicked?.Invoke(cd.Color);
+                }
+            }
+        }
+
+        private async Task ExportVideoAsync()
+        {
+            PausePlayback();
+
+            using (var sfd = new SaveFileDialog { Filter = "MP4 Video|*.mp4", DefaultExt = ".mp4" })
+            {
+                if (sfd.ShowDialog() == DialogResult.OK)
+                {
+                    using (var progressForm = new ProgressForm())
+                    {
+                        var progress = new Progress<int>(percent =>
+                        {
+                            progressForm.UpdateProgress(percent, $"Rendering & encoding video... {percent}%");
+                        });
+
+                        progressForm.Show(this);
+                        this.Enabled = false;
+
+                        try
+                        {
+                            await exportService.ExportToVideo(mediaItems, sfd.FileName, (time, g) =>
+                            {
+                                using (var exportedFrame = VideoRenderHelper.RenderExportFrame(mediaItems, time, 1080, 1920))
+                                {
+                                    g.DrawImage(exportedFrame, 0, 0, 1080, 1920);
+                                }
+                            }, progress);
+
+                            progressForm.Close();
+                            this.Enabled = true;
+
+                            MessageBox.Show(this, "Video exported successfully!", "Export Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                        catch (Exception ex)
+                        {
+                            progressForm.Close();
+                            this.Enabled = true;
+
+                            MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                    }
+                }
+            }
         }
 
         private void InitializePlaybackEngine()
@@ -162,234 +345,6 @@ namespace VideoEditor
             isPlaying = false;
             btnPlayPause.Text = "▶ Play";
             playbackTimer.Stop();
-        }
-
-        private void InitializeUI()
-        {
-            this.Text = "VideoEditor - Mobile Slideshow Video Maker";
-            this.Size = new Size(1400, 900);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = Color.FromArgb(25, 25, 25);
-
-            var mainLayout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 3,
-                RowCount = 3
-            };
-
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 220));
-
-            var toolbar = CreateToolbar();
-            mainLayout.Controls.Add(toolbar, 0, 0);
-            mainLayout.SetColumnSpan(toolbar, 3);
-
-            var leftPanel = CreateMediaPanel();
-            mainLayout.Controls.Add(leftPanel, 0, 1);
-
-            previewControl = new PreviewControl { Dock = DockStyle.Fill };
-            mainLayout.Controls.Add(previewControl, 1, 1);
-
-            var rightPanel = CreateActionSidebar();
-            mainLayout.Controls.Add(rightPanel, 2, 1);
-
-            timelineControl = new TimelineControl(mediaItems) { Dock = DockStyle.Fill };
-
-            timelineControl.TimeChanged += (time) =>
-            {
-                previewControl.RenderFrame(mediaItems, time);
-
-                if (isUserScrubbing || !isPlaying)
-                {
-                    pendingScrubTime = time;
-                    scrubAudioTimer.Stop();
-                    scrubAudioTimer.Start();
-                }
-            };
-
-            timelineControl.ClipSelected += (selectedItem) =>
-            {
-                previewControl.SelectedItem = selectedItem;
-                BindSelectedMediaToUI(selectedItem);
-                if (selectedItem?.Type == MediaType.Text && selectedItem.TextData != null)
-                {
-                    BindTextLabelToUI(selectedItem.TextData);
-                    previewControl.SelectedTextLabel = selectedItem.TextData;
-                }
-                previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
-            };
-
-            timelineControl.ItemResized += (resizedItem) =>
-            {
-                TimelineControl_ItemResized(timelineControl, resizedItem);
-            };
-
-            previewControl.TextLabelSelected += (label) =>
-            {
-                BindTextLabelToUI(label);
-            };
-
-            timelineControl.MouseDown += (s, e) =>
-            {
-                isUserScrubbing = true;
-                if (isPlaying) PausePlayback();
-            };
-
-            timelineControl.MouseUp += (s, e) =>
-            {
-                isUserScrubbing = false;
-                scrubAudioTimer.Stop();
-                ApplyAudioSeek(timelineControl.CurrentTime);
-            };
-
-            mainLayout.Controls.Add(timelineControl, 0, 2);
-            mainLayout.SetColumnSpan(timelineControl, 3);
-
-            this.Controls.Add(mainLayout);
-        }
-
-        private Control CreateActionSidebar()
-        {
-            var panel = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(30, 30, 30),
-                Padding = new Padding(12),
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-                AutoScroll = true
-            };
-
-            panel.Controls.Add(new Label
-            {
-                Text = "Editing Actions",
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                AutoSize = true,
-                Margin = new Padding(0, 0, 0, 8)
-            });
-
-            // --- TIMELINE ACTIONS ---
-            panel.Controls.Add(CreateActionButton("✂ Split Clip", () => SplitSelectedClip()));
-            panel.Controls.Add(CreateActionButton("✂◄ Split Left (Trim Left)", () => SplitLeftSelectedClip()));
-            panel.Controls.Add(CreateActionButton("►✂ Split Right (Trim Right)", () => SplitRightSelectedClip()));
-
-            panel.Controls.Add(new Label { Height = 1, Width = 230, BackColor = Color.FromArgb(60, 60, 60), Margin = new Padding(0, 10, 0, 10) });
-
-            // --- TEXT OVERLAY TOOLKIT ---
-            panel.Controls.Add(CreateSectionHeader("Text Overlays"));
-
-            panel.Controls.Add(CreateStyledButton("➕ Add Text Layer", () =>
-            {
-                var newLabel = new TextLabel
-                {
-                    Content = "Type text here...",
-                    X = 100,
-                    Y = 200,
-                    Width = 350,
-                    Height = 90,
-                    FontSize = (float)numFontSize.Value,
-                };
-
-                var textMediaItem = new MediaItem
-                {
-                    Type = MediaType.Text,
-                    StartTime = timelineControl.CurrentTime,
-                    Duration = 3.0,
-                    TextData = newLabel
-                };
-
-                mediaItems.Add(textMediaItem);
-                mediaListBox.Items.Add($"Text: {newLabel.Content}");
-                previewControl.SelectedTextLabel = newLabel;
-                RefreshTimeline();
-            }));
-
-            panel.Controls.Add(CreateSubLabel("Font Size:"));
-            numFontSize = new NumericUpDown { Width = 230, Minimum = 10, Maximum = 120, Value = 32, BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White };
-            numFontSize.ValueChanged += (s, e) => { if (!isBindingUI && previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.FontSize = (float)numFontSize.Value; previewControl.Invalidate(); } };
-            panel.Controls.Add(numFontSize);
-
-            var colorFlow = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, Width = 230, Height = 40, WrapContents = false };
-            btnTextColor = CreateMiniColorButton("Text Color", Color.White, c => { if (previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.TextColor = c; previewControl.Invalidate(); } });
-            btnBgColor = CreateMiniColorButton("Bg Color", Color.FromArgb(128, 0, 0, 0), c => { if (previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.BackgroundColor = c; previewControl.Invalidate(); } });
-            colorFlow.Controls.Add(btnTextColor);
-            colorFlow.Controls.Add(btnBgColor);
-            panel.Controls.Add(colorFlow);
-
-            panel.Controls.Add(CreateSubLabel("Box Boundaries (Width / Height):"));
-            var sizeFlow = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, Width = 230, Height = 35, WrapContents = false };
-            numBoxWidth = new NumericUpDown { Width = 110, Minimum = 50, Maximum = 1080, Value = 350, BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White };
-            numBoxHeight = new NumericUpDown { Width = 110, Minimum = 30, Maximum = 1920, Value = 90, BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White };
-
-            numBoxWidth.ValueChanged += (s, e) => { if (!isBindingUI && previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.Width = (float)numBoxWidth.Value; previewControl.Invalidate(); } };
-            numBoxHeight.ValueChanged += (s, e) => { if (!isBindingUI && previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.Height = (float)numBoxHeight.Value; previewControl.Invalidate(); } };
-
-            sizeFlow.Controls.Add(numBoxWidth);
-            sizeFlow.Controls.Add(numBoxHeight);
-            panel.Controls.Add(sizeFlow);
-
-            panel.Controls.Add(new Label { Height = 1, Width = 230, BackColor = Color.FromArgb(60, 60, 60), Margin = new Padding(0, 10, 0, 10) });
-
-            // --- ANIMATIONS & TIMING ---
-            panel.Controls.Add(CreateSectionHeader("Clip Animations"));
-            panel.Controls.Add(CreateSubLabel("Total Clip Duration (s)"));
-            numDuration = CreateNumberInput();
-            numDuration.ValueChanged += NumDuration_ValueChanged;
-            panel.Controls.Add(numDuration);
-
-            panel.Controls.Add(CreateSubLabel("In Animation (Entrance)"));
-            cbInEffect = CreateEffectDropdown();
-            cbInEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
-            panel.Controls.Add(cbInEffect);
-
-            panel.Controls.Add(CreateSubLabel("In Duration (s)"));
-            numInDuration = CreateNumberInput();
-            numInDuration.ValueChanged += (s, e) => SaveAnimationSettings();
-            panel.Controls.Add(numInDuration);
-
-            panel.Controls.Add(CreateSubLabel("Out Animation (Exit)"));
-            cbOutEffect = CreateEffectDropdown();
-            cbOutEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
-            panel.Controls.Add(cbOutEffect);
-
-            panel.Controls.Add(CreateSubLabel("Out Duration (s)"));
-            numOutDuration = CreateNumberInput();
-            numOutDuration.ValueChanged += (s, e) => SaveAnimationSettings();
-            panel.Controls.Add(numOutDuration);
-
-            return panel;
-        }
-
-        private Button CreateMiniColorButton(string title, Color initialColor, Action<Color> onColorPicked)
-        {
-            var btn = new Button
-            {
-                Text = title,
-                Width = 110,
-                Height = 28,
-                BackColor = Color.FromArgb(55, 55, 55),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8)
-            };
-            btn.Click += (s, e) =>
-            {
-                using (var cd = new ColorDialog { Color = initialColor })
-                {
-                    if (cd.ShowDialog() == DialogResult.OK)
-                    {
-                        onColorPicked?.Invoke(cd.Color);
-                    }
-                }
-            };
-            return btn;
         }
 
         private void BindTextLabelToUI(TextLabel label)
@@ -617,43 +572,6 @@ namespace VideoEditor
             RefreshTimeline();
         }
 
-        private Label CreateSectionHeader(string text) => new Label { Text = text, ForeColor = Color.Yellow, Font = new Font("Segoe UI", 9, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 8, 0, 3) };
-        private Label CreateSubLabel(string text) => new Label { Text = text, ForeColor = Color.LightGray, Font = new Font("Segoe UI", 8), AutoSize = true, Margin = new Padding(0, 4, 0, 2) };
-
-        private ComboBox CreateEffectDropdown()
-        {
-            var cb = new ComboBox
-            {
-                Width = 230,
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(55, 55, 55),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
-
-            cb.Items.AddRange(new object[] {
-                "None", "Fade", "Slide", "Wave", "Zoom", "ZoomBlur",
-                "ZoomBlurUp", "ZoomBlurDown", "ZoomBlurLeft", "ZoomBlurRight", "DynamicZoomBlur"
-            });
-
-            cb.SelectedIndex = 0;
-            return cb;
-        }
-
-        private NumericUpDown CreateNumberInput()
-        {
-            return new NumericUpDown
-            {
-                Width = 230,
-                Minimum = 0.0m,
-                Maximum = 60.0m,
-                DecimalPlaces = 2,
-                Increment = 0.1m,
-                BackColor = Color.FromArgb(55, 55, 55),
-                ForeColor = Color.White
-            };
-        }
-
         private void TimelineControl_ItemResized(object sender, MediaItem item)
         {
             if (item != null)
@@ -710,27 +628,6 @@ namespace VideoEditor
             }
 
             isBindingUI = false;
-        }
-
-        private Button CreateActionButton(string text, Action onClick)
-        {
-            var btn = new Button
-            {
-                Text = text,
-                Width = 230,
-                Height = 32,
-                BackColor = Color.FromArgb(50, 50, 50),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(8, 0, 0, 0),
-                Margin = new Padding(0, 0, 0, 5),
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular)
-            };
-            btn.FlatAppearance.BorderSize = 1;
-            btn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 70);
-            btn.Click += (s, e) => onClick?.Invoke();
-            return btn;
         }
 
         private void SplitSelectedClip()
@@ -805,69 +702,6 @@ namespace VideoEditor
             previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
         }
 
-
-        private Control CreateToolbar()
-        {
-            var toolbar = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(35, 35, 35),
-                Padding = new Padding(10)
-            };
-
-            toolbar.Controls.Add(CreateStyledButton("📁 Import Files", () => ImportFiles()));
-
-            btnPlayPause = CreateStyledButton("▶ Play", () => TogglePlayback());
-            toolbar.Controls.Add(btnPlayPause);
-
-            toolbar.Controls.Add(CreateStyledButton("🗑 Delete Selected", () => DeleteSelectedMedia()));
-
-            toolbar.Controls.Add(CreateStyledButton("Export Video", async () =>
-            {
-                PausePlayback();
-
-                using (var sfd = new SaveFileDialog { Filter = "MP4 Video|*.mp4", DefaultExt = ".mp4" })
-                {
-                    if (sfd.ShowDialog() == DialogResult.OK)
-                    {
-                        using (var progressForm = new ProgressForm())
-                        {
-                            var progress = new Progress<int>(percent =>
-                            {
-                                progressForm.UpdateProgress(percent, $"Rendering & encoding video... {percent}%");
-                            });
-
-                            progressForm.Show(this);
-                            this.Enabled = false;
-
-                            try
-                            {
-                                await exportService.ExportToVideo(mediaItems, sfd.FileName, (time, g) =>
-                                {
-                                    using (var exportedFrame = VideoRenderHelper.RenderExportFrame(mediaItems, time, 1080, 1920))
-                                    {
-                                        g.DrawImage(exportedFrame, 0, 0, 1080, 1920);
-                                    }
-                                }, progress);
-
-                                progressForm.Close();
-                                this.Enabled = true;
-
-                                MessageBox.Show(this, "Video exported successfully!", "Export Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                            }
-                            catch (Exception ex)
-                            {
-                                progressForm.Close();
-                                this.Enabled = true;
-
-                                MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            }
-                        }
-                    }
-                }
-            }));
-            return toolbar;
-        }
         public void RenderPreviewAtTime(double timePosition, Graphics g, Size canvasSize)
         {
             g.Clear(Color.Black);
@@ -977,14 +811,6 @@ namespace VideoEditor
             else StartPlayback();
         }
 
-        private Control CreateMediaPanel()
-        {
-            var panel = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(35, 35, 35) };
-            mediaListBox = new ListBox { Dock = DockStyle.Fill, BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White };
-            panel.Controls.Add(mediaListBox);
-            return panel;
-        }
-
         private double GetAudioDuration(string filePath)
         {
             try
@@ -1039,24 +865,6 @@ namespace VideoEditor
                 previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
             }
         }
-
-        private Button CreateStyledButton(string text, Action onClick)
-        {
-            var btn = new Button
-            {
-                Text = text,
-                BackColor = Color.FromArgb(0, 120, 215),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Width = 230,
-                Height = 32,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Margin = new Padding(0, 0, 0, 5)
-            };
-            btn.FlatAppearance.BorderSize = 0;
-            btn.Click += (s, e) => onClick?.Invoke();
-            return btn;
-        }
     }
 
     public class ProgressForm : Form
@@ -1073,12 +881,12 @@ namespace VideoEditor
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.ControlBox = false;
-            this.BackColor = Color.FromArgb(35, 35, 35);
+            this.BackColor = Color.FromArgb(28, 28, 28);
 
             lblStatus = new Label
             {
                 Text = "Rendering video...",
-                ForeColor = Color.White,
+                ForeColor = Color.FromArgb(240, 240, 240),
                 Location = new Point(20, 20),
                 AutoSize = true
             };

@@ -8,9 +8,9 @@ using VideoEditor.Models;
 
 namespace VideoEditor.Controls
 {
-    public class TimelineControl : Control
+    public class TimelineControl : UserControl
     {
-        private List<MediaItem> mediaItems;
+        private List<MediaItem> mediaItems = new List<MediaItem>();
         private double currentTime = 0;
         private double pixelsPerSecond = 40;
         private double minPixelsPerSecond = 10;
@@ -52,9 +52,9 @@ namespace VideoEditor.Controls
             }
         }
 
-        public TimelineControl(List<MediaItem> items)
+        // Parameterless constructor required by WinForms Designer
+        public TimelineControl()
         {
-            mediaItems = items;
             this.DoubleBuffered = true;
             this.BackColor = Color.FromArgb(25, 25, 25);
 
@@ -72,6 +72,20 @@ namespace VideoEditor.Controls
             this.MouseUp += Timeline_MouseUp;
             this.MouseWheel += Timeline_MouseWheel;
             this.Resize += (s, e) => UpdateScrollBars();
+        }
+
+        // Overloaded constructor for instantiation with existing items
+        public TimelineControl(List<MediaItem> items) : this()
+        {
+            SetMediaItems(items);
+        }
+
+        // Public method to bind/update media items from MainForm
+        public void SetMediaItems(List<MediaItem> items)
+        {
+            mediaItems = items ?? new List<MediaItem>();
+            UpdateScrollBars();
+            this.Invalidate();
         }
 
         private int GetMaxVisualTrackIndex()
