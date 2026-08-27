@@ -12,9 +12,16 @@ namespace VideoEditor.Controls
     {
         private List<MediaItem> mediaItems;
         private double currentTime = 0;
-        private double pixelsPerSecond = 40;
+        private double pixelsPerSecond = 40; // Zoom level
+        private double minPixelsPerSecond = 10;
+        private double maxPixelsPerSecond = 200;
+
+        private int scrollX = 0; // Horizontal scroll offset
+        private HScrollBar hScrollBar;
+
         private const int headerHeight = 30;
         private const int trackHeight = 50;
+        private const int scrollBarHeight = 18;
 
         private bool isDraggingPlayhead = false;
         private bool isDraggingClip = false;
@@ -24,7 +31,6 @@ namespace VideoEditor.Controls
         private double clipDragOffset = 0;
         private const int EdgeMargin = 8;
 
-        // Cache waveforms per audio file path to avoid re-calculating on every frame paint
         private Dictionary<string, float[]> waveformCache = new Dictionary<string, float[]>();
 
         public event Action<double> TimeChanged;
@@ -50,9 +56,40 @@ namespace VideoEditor.Controls
             this.DoubleBuffered = true;
             this.BackColor = Color.FromArgb(25, 25, 25);
 
+            // Initialize Horizontal ScrollBar
+            hScrollBar = new HScrollBar
+            {
+                Dock = DockStyle.Bottom,
+                Height = scrollBarHeight
+            };
+            hScrollBar.Scroll += HScrollBar_Scroll;
+            this.Controls.Add(hScrollBar);
+
             this.MouseDown += Timeline_MouseDown;
             this.MouseMove += Timeline_MouseMove;
             this.MouseUp += Timeline_MouseUp;
+            this.MouseWheel += Timeline_MouseWheel;
+            this.Resize += (s, e) => UpdateScrollBar();
+        }
+
+        private void HScrollBar_Scroll(object sender, ScrollEventArgs e)
+        {
+            scrollX = e.NewValue;
+            this.Invalidate();
+        }
+
+        private void UpdateScrollBar()
+        {
+            double totalDuration = GetTotalDuration();
+            int totalWidth = (int)(totalDuration * pixelsPerSecond) + 300; // Extra padding at the end
+
+            int maxScroll = Math.Max(0, totalWidth - this.Width);
+            hScrollBar.Maximum = maxScroll + hScrollBar.LargeChange;
+            hScrollBar.LargeChange = Math.Max(1, this.Width);
+            hScrollBar.SmallChange = (int)pixelsPerSecond;
+
+            scrollX = Math.Clamp(scrollX, 0, maxScroll);
+            hScrollBar.Value = scrollX;
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -60,13 +97,21 @@ namespace VideoEditor.Controls
             base.OnPaint(e);
             var g = e.Graphics;
 
+            UpdateScrollBar();
+
             // 1. Draw Time Ruler Header
             g.FillRectangle(new SolidBrush(Color.FromArgb(35, 35, 35)), 0, 0, this.Width, headerHeight);
             double totalDuration = GetTotalDuration();
+            double visibleDuration = (this.Width + scrollX) / pixelsPerSecond;
 
-            for (int i = 0; i <= Math.Max(totalDuration + 10, 60); i += 2)
+            int stepSeconds = pixelsPerSecond < 20 ? 10 : (pixelsPerSecond < 50 ? 2 : 1);
+
+            for (int i = 0; i <= Math.Max(totalDuration + 60, visibleDuration + 10); i += stepSeconds)
             {
-                int x = (int)(i * pixelsPerSecond);
+                int x = (int)(i * pixelsPerSecond) - scrollX;
+                if (x < 0) continue;
+                if (x > this.Width) break;
+
                 g.DrawLine(Pens.Gray, x, headerHeight - 8, x, headerHeight);
                 g.DrawString($"{i}s", this.Font, Brushes.Gray, x + 2, 2);
             }
@@ -82,17 +127,18 @@ namespace VideoEditor.Controls
             foreach (var item in mediaItems)
             {
                 int y = item.Type == MediaType.Image ? imageTrackY : audioTrackY;
-                int x = (int)(item.StartTime * pixelsPerSecond);
+                int x = (int)(item.StartTime * pixelsPerSecond) - scrollX;
                 int width = (int)(item.Duration * pixelsPerSecond);
 
                 var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
+
+                if (rect.Right < 0 || rect.Left > this.Width) continue;
 
                 var color = item.Type == MediaType.Image ? Color.SteelBlue : Color.MediumPurple;
                 if (item == SelectedItem) color = Color.Crimson;
 
                 g.FillRectangle(new SolidBrush(color), rect);
 
-                // --- AUDIO WAVEFORM / BAR GRAPH RENDER ---
                 if (item.Type == MediaType.Audio)
                 {
                     DrawAudioClip(g, item, rect);
@@ -108,28 +154,49 @@ namespace VideoEditor.Controls
             }
 
             // 4. Draw Playhead
-            int playheadX = (int)(currentTime * pixelsPerSecond);
-            g.DrawLine(new Pen(Color.Red, 2), playheadX, 0, playheadX, this.Height);
+            int playheadX = (int)(currentTime * pixelsPerSecond) - scrollX;
+            if (playheadX >= 0 && playheadX <= this.Width)
+            {
+                g.DrawLine(new Pen(Color.Red, 2), playheadX, 0, playheadX, this.Height - scrollBarHeight);
+            }
+        }
+
+        private void Timeline_MouseWheel(object sender, MouseEventArgs e)
+        {
+            if (ModifierKeys == Keys.Control)
+            {
+                // CapCut-style Zooming
+                double mouseTime = (e.X + scrollX) / pixelsPerSecond;
+
+                if (e.Delta > 0)
+                    pixelsPerSecond = Math.Min(pixelsPerSecond * 1.15, maxPixelsPerSecond);
+                else
+                    pixelsPerSecond = Math.Max(pixelsPerSecond / 1.15, minPixelsPerSecond);
+
+                scrollX = Math.Max(0, (int)(mouseTime * pixelsPerSecond - e.X));
+            }
+            else
+            {
+                // Horizontal Scrolling
+                scrollX = Math.Max(0, scrollX - (e.Delta / 2));
+            }
+
+            UpdateScrollBar();
+            this.Invalidate();
         }
 
         private void DrawAudioClip(Graphics g, MediaItem item, Rectangle clipBounds)
         {
-            // 1. Restrict drawing area so anything outside the trimmed clip is clipped out
             g.SetClip(clipBounds);
 
-            // 2. Use the timeline scale (pixelsPerSecond) so 1 second always equals the same pixel width
             double originalDuration = item.OriginalDuration > 0 ? item.OriginalDuration : item.Duration;
             int fullUnclippedWidth = (int)(originalDuration * pixelsPerSecond);
 
-            // 3. Shift the target drawing box left by the trim offset (SourceOffset)
             int renderX = clipBounds.X - (int)(item.SourceOffset * pixelsPerSecond);
-
             Rectangle fullWaveformBounds = new Rectangle(renderX, clipBounds.Y, fullUnclippedWidth, clipBounds.Height);
 
-            // 4. Render the UNSTRETCHED waveform
             DrawWaveformPeaks(g, item, fullWaveformBounds);
 
-            // Reset clip region
             g.ResetClip();
         }
 
@@ -157,10 +224,8 @@ namespace VideoEditor.Controls
             {
                 g.DrawLine(centerLinePen, bounds.Left, centerY, bounds.Right, centerY);
 
-                // Step through screen coordinates across the full unclipped width
                 for (int x = bounds.Left; x < bounds.Right; x += totalBarSpace)
                 {
-                    // Map physical screen position back to full audio progress
                     float progress = (float)(x - bounds.Left) / bounds.Width;
                     int peakIndex = (int)(progress * peaks.Length);
                     peakIndex = Math.Clamp(peakIndex, 0, peaks.Length - 1);
@@ -180,23 +245,20 @@ namespace VideoEditor.Controls
                 if (!File.Exists(filePath)) return new float[0];
 
                 byte[] fileBytes = File.ReadAllBytes(filePath);
-
-                // Standard WAV headers are at least 44 bytes long
                 int headerOffset = 44;
                 if (fileBytes.Length <= headerOffset) return new float[0];
 
-                // Parse channels and bit depth from header if available
                 int channels = BitConverter.ToUInt16(fileBytes, 22);
                 int bitsPerSample = BitConverter.ToUInt16(fileBytes, 34);
 
-                if (channels == 0) channels = 2; // Default fallback to stereo
+                if (channels == 0) channels = 2;
                 if (bitsPerSample == 0) bitsPerSample = 16;
 
                 int bytesPerSample = bitsPerSample / 8;
                 int totalAudioBytes = fileBytes.Length - headerOffset;
                 int totalSamples = totalAudioBytes / (bytesPerSample * channels);
 
-                int targetBarCount = 400; // Number of bars to display across timeline
+                int targetBarCount = 400;
                 float[] peaks = new float[targetBarCount];
                 int samplesPerBar = Math.Max(1, totalSamples / targetBarCount);
 
@@ -211,17 +273,12 @@ namespace VideoEditor.Controls
                         int byteIndex = headerOffset + (s * channels * bytesPerSample);
                         if (byteIndex + 1 >= fileBytes.Length) break;
 
-                        // Read 16-bit PCM Audio Sample
                         short sampleValue = (short)(fileBytes[byteIndex] | (fileBytes[byteIndex + 1] << 8));
                         float absValue = Math.Abs(sampleValue / 32768f);
 
-                        if (absValue > maxAmplitude)
-                        {
-                            maxAmplitude = absValue;
-                        }
+                        if (absValue > maxAmplitude) maxAmplitude = absValue;
                     }
 
-                    // Noise gate: remove background jitter/silence artifacts
                     peaks[i] = maxAmplitude < 0.02f ? 0f : Math.Min(maxAmplitude * 1.5f, 1.0f);
                 }
 
@@ -232,17 +289,15 @@ namespace VideoEditor.Controls
                 return new float[0];
             }
         }
-        public void ClearWaveformCache()
-        {
-            waveformCache.Clear();
-            this.Invalidate();
-        }
+
         private void Timeline_MouseDown(object sender, MouseEventArgs e)
         {
+            if (e.Y > this.Height - scrollBarHeight) return;
+
             if (e.Y <= headerHeight)
             {
                 isDraggingPlayhead = true;
-                CurrentTime = e.X / pixelsPerSecond;
+                CurrentTime = (e.X + scrollX) / pixelsPerSecond;
                 return;
             }
 
@@ -254,7 +309,7 @@ namespace VideoEditor.Controls
             foreach (var item in mediaItems)
             {
                 int y = item.Type == MediaType.Image ? imageTrackY : audioTrackY;
-                int x = (int)(item.StartTime * pixelsPerSecond);
+                int x = (int)(item.StartTime * pixelsPerSecond) - scrollX;
                 int width = (int)(item.Duration * pixelsPerSecond);
                 var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
 
@@ -271,7 +326,7 @@ namespace VideoEditor.Controls
                     else
                     {
                         isDraggingClip = true;
-                        clipDragOffset = (e.X / pixelsPerSecond) - item.StartTime;
+                        clipDragOffset = ((e.X + scrollX) / pixelsPerSecond) - item.StartTime;
                     }
 
                     this.Invalidate();
@@ -280,7 +335,7 @@ namespace VideoEditor.Controls
             }
 
             ClipSelected?.Invoke(null);
-            CurrentTime = e.X / pixelsPerSecond;
+            CurrentTime = (e.X + scrollX) / pixelsPerSecond;
         }
 
         private void Timeline_MouseMove(object sender, MouseEventArgs e)
@@ -294,7 +349,7 @@ namespace VideoEditor.Controls
                 foreach (var item in mediaItems)
                 {
                     int y = item.Type == MediaType.Image ? imageTrackY : audioTrackY;
-                    int x = (int)(item.StartTime * pixelsPerSecond);
+                    int x = (int)(item.StartTime * pixelsPerSecond) - scrollX;
                     int width = (int)(item.Duration * pixelsPerSecond);
 
                     if (e.Y >= y && e.Y <= y + trackHeight && Math.Abs(e.X - (x + width)) <= EdgeMargin)
@@ -308,11 +363,11 @@ namespace VideoEditor.Controls
 
             if (isDraggingPlayhead)
             {
-                CurrentTime = e.X / pixelsPerSecond;
+                CurrentTime = (e.X + scrollX) / pixelsPerSecond;
             }
             else if (isResizingClip && activeClip != null)
             {
-                double newDuration = (e.X / pixelsPerSecond) - activeClip.StartTime;
+                double newDuration = ((e.X + scrollX) / pixelsPerSecond) - activeClip.StartTime;
                 activeClip.Duration = Math.Max(0.5, newDuration);
                 ItemResized?.Invoke(activeClip);
 
@@ -321,7 +376,7 @@ namespace VideoEditor.Controls
             }
             else if (isDraggingClip && activeClip != null)
             {
-                double newStart = (e.X / pixelsPerSecond) - clipDragOffset;
+                double newStart = ((e.X + scrollX) / pixelsPerSecond) - clipDragOffset;
                 activeClip.StartTime = Math.Max(0, newStart);
                 this.Invalidate();
                 TimeChanged?.Invoke(currentTime);
