@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Windows.Media;
@@ -18,6 +19,14 @@ namespace VideoEditor
 {
     public partial class MainForm : Form
     {
+        [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubIdList);
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
         private List<MediaItem> mediaItems = new List<MediaItem>();
         private VideoExportService exportService;
         private AudioCaptionService captionService;
@@ -48,6 +57,30 @@ namespace VideoEditor
 
             WireUpEvents();
             InitializePlaybackEngine();
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+
+            // Apply dark mode scrollbars recursively to the main form and all child controls
+            ApplyDarkModeTheme(this);
+        }
+
+        private void ApplyDarkModeTheme(Control parent)
+        {
+            if (parent == null || !parent.IsHandleCreated) return;
+
+            // Apply Windows Dark Theme to controls with native scrollbars
+            SetWindowTheme(parent.Handle, "Explorer", null);
+
+            int useDarkMode = 1;
+            DwmSetWindowAttribute(parent.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDarkMode, sizeof(int));
+
+            foreach (Control child in parent.Controls)
+            {
+                ApplyDarkModeTheme(child);
+            }
         }
 
         private void WireUpEvents()

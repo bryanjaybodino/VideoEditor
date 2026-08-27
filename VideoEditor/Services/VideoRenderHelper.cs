@@ -139,9 +139,28 @@ namespace VideoEditor.Services
                 Math.Max(label.RelativeHeight * canvasHeight, 30)
             );
 
-            using var font = new Font("Segoe UI", label.FontSize > 0 ? label.FontSize : 16f, FontStyle.Bold);
-            using var brush = new SolidBrush(label.TextColor);
-            g.DrawString(label.Content, font, brush, rect);
+            // 1. Fill the background rectangle
+            using (var bgBrush = new SolidBrush(label.BackgroundColor))
+            {
+                g.FillRectangle(bgBrush, rect);
+            }
+
+            // 2. Draw the text content
+            using var font = new Font(
+                !string.IsNullOrEmpty(label.FontFamily) ? label.FontFamily : "Segoe UI",
+                label.FontSize > 0 ? label.FontSize : 16f,
+                label.IsBold ? FontStyle.Bold : FontStyle.Regular
+            );
+            using var textBrush = new SolidBrush(label.TextColor);
+
+            var sf = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center,
+                Trimming = StringTrimming.Word
+            };
+
+            g.DrawString(label.Content, font, textBrush, rect, sf);
         }
     }
 }
