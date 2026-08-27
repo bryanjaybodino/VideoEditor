@@ -14,8 +14,10 @@ namespace VideoEditor.Services
     public class VideoExportService
     {
         private string ffmpegPath = "ffmpeg";
-        private const int TargetWidth = 1280;
-        private const int TargetHeight = 720;
+
+        // Locked to 9:16 Vertical Mobile Aspect Ratio
+        private const int TargetWidth = 1080;
+        private const int TargetHeight = 1920;
         private const int FrameRate = 30;
 
         public async Task ExportToVideo(List<MediaItem> mediaItems, string outputPath)
@@ -90,24 +92,12 @@ namespace VideoEditor.Services
                 {
                     using (var sourceImg = Image.FromFile(activeItem.FilePath))
                     {
-                        double localTime = timePosition - activeItem.StartTime;
-                        int x = 0;
-                        int y = 0;
-                        int w = TargetWidth;
-                        int h = TargetHeight;
-
-                        double transitionDuration = activeItem.InEffect?.Duration ?? 0.5;
-
-                        if (activeItem.InEffect?.Type == "Slide" && localTime < transitionDuration)
-                        {
-                            float progress = (float)(localTime / transitionDuration);
-                            x = (int)(-TargetWidth + TargetWidth * progress);
-                        }
-                        else if (activeItem.InEffect?.Type == "Wave" && localTime < transitionDuration)
-                        {
-                            float progress = (float)(localTime / transitionDuration);
-                            y += (int)(Math.Sin(progress * Math.PI * 4) * 20);
-                        }
+                        // Fill screen maintaining aspect ratio (Aspect Fill)
+                        float scale = Math.Max((float)TargetWidth / sourceImg.Width, (float)TargetHeight / sourceImg.Height);
+                        int w = (int)(sourceImg.Width * scale);
+                        int h = (int)(sourceImg.Height * scale);
+                        int x = (TargetWidth - w) / 2;
+                        int y = (TargetHeight - h) / 2;
 
                         g.DrawImage(sourceImg, x, y, w, h);
                     }

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -81,36 +82,193 @@ namespace VideoEditor.Controls
 
         private void DrawAnimatedImage(Graphics g, Image img, MediaItem item, double timePosition)
         {
-            double localTime = timePosition - item.StartTime;
-            float scale = Math.Min((float)this.Width / img.Width, (float)this.Height / img.Height);
+            // 1. Enforce 9:16 Canvas Box inside preview panel
+            float targetAspect = 9.0f / 16.0f;
+            int canvasWidth = this.Width;
+            int canvasHeight = this.Height;
+
+            if ((float)canvasWidth / canvasHeight > targetAspect)
+            {
+                canvasWidth = (int)(canvasHeight * targetAspect);
+            }
+            else
+            {
+                canvasHeight = (int)(canvasWidth / targetAspect);
+            }
+
+            int canvasX = (this.Width - canvasWidth) / 2;
+            int canvasY = (this.Height - canvasHeight) / 2;
+
+            // Fill 9:16 area maintaining aspect ratio
+            float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height);
             int baseW = (int)(img.Width * scale);
             int baseH = (int)(img.Height * scale);
-            int x = (this.Width - baseW) / 2;
-            int y = (this.Height - baseH) / 2;
+            int originX = canvasX + (canvasWidth - baseW) / 2;
+            int originY = canvasY + (canvasHeight - baseH) / 2;
 
-            double transitionDuration = item.InEffect?.Duration ?? 0.5;
+            int x = originX;
+            int y = originY;
 
-            // --- CapCut In-Effect: Slide In From Left ---
-            if (item.InEffect?.Type == "Slide" && localTime < transitionDuration)
+            // Clip rendering strictly to 9:16 canvas frame boundary
+            g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
+
+            double localTime = timePosition - item.StartTime;
+            double remainingTime = item.Duration - localTime;
+
+            float opacity = 1.0f;
+            float zoomFactor = 1.0f;
+            float zoomBlurIntensity = 0.0f;
+
+            // --- IN ANIMATION ---
+            double inDur = item.InEffect?.Duration ?? 0;
+            if (localTime >= 0 && localTime < inDur && inDur > 0 && item.InEffect != null)
             {
-                float progress = (float)(localTime / transitionDuration);
-                x = (int)(-baseW + (x + baseW) * progress);
-            }
-            // --- CapCut In-Effect: Wave Wobble ---
-            else if (item.InEffect?.Type == "Wave" && localTime < transitionDuration)
-            {
-                float progress = (float)(localTime / transitionDuration);
-                float waveOffset = (float)Math.Sin(progress * Math.PI * 4) * 15;
-                y += (int)waveOffset;
+                float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(localTime / inDur)));
+                float invertProgress = 1.0f - progress;
+
+                switch (item.InEffect.Type)
+                {
+                    case "Fade":
+                        opacity *= progress;
+                        break;
+                    case "Slide":
+                        x = (int)(originX - canvasWidth + (canvasWidth * progress));
+                        break;
+                    case "Wave":
+                        y += (int)(Math.Sin(progress * Math.PI * 4) * 15);
+                        break;
+                    case "Zoom":
+                        zoomFactor *= (0.5f + 0.5f * progress);
+                        break;
+                    case "ZoomBlur":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        break;
+                    case "ZoomBlurUp":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        y -= (int)(canvasHeight * invertProgress);
+                        break;
+                    case "ZoomBlurDown":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        y += (int)(canvasHeight * invertProgress);
+                        break;
+                    case "ZoomBlurLeft":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        x -= (int)(canvasWidth * invertProgress);
+                        break;
+                    case "ZoomBlurRight":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        x += (int)(canvasWidth * invertProgress);
+                        break;
+                }
             }
 
-            g.DrawImage(img, x, y, baseW, baseH);
+            // --- OUT ANIMATION ---
+            double outDur = item.OutEffect?.Duration ?? 0;
+            if (remainingTime >= 0 && remainingTime < outDur && outDur > 0 && item.OutEffect != null)
+            {
+                float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(remainingTime / outDur)));
+                float invertProgress = 1.0f - progress;
+
+                switch (item.OutEffect.Type)
+                {
+                    case "Fade":
+                        opacity *= progress;
+                        break;
+                    case "Slide":
+                        x += (int)(canvasWidth * invertProgress);
+                        break;
+                    case "Wave":
+                        y += (int)(Math.Sin(invertProgress * Math.PI * 4) * 15);
+                        break;
+                    case "Zoom":
+                        zoomFactor *= (1.0f + 0.5f * invertProgress);
+                        break;
+                    case "ZoomBlur":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        break;
+                    case "ZoomBlurUp":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        y -= (int)(canvasHeight * invertProgress);
+                        break;
+                    case "ZoomBlurDown":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        y += (int)(canvasHeight * invertProgress);
+                        break;
+                    case "ZoomBlurLeft":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        x -= (int)(canvasWidth * invertProgress);
+                        break;
+                    case "ZoomBlurRight":
+                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                        x += (int)(canvasWidth * invertProgress);
+                        break;
+                }
+            }
+
+            // Apply Zoom Scaling
+            if (zoomFactor != 1.0f)
+            {
+                int newW = (int)(baseW * zoomFactor);
+                int newH = (int)(baseH * zoomFactor);
+                x += (baseW - newW) / 2;
+                y += (baseH - newH) / 2;
+                baseW = newW;
+                baseH = newH;
+            }
+
+            // Render Frame
+            if (zoomBlurIntensity > 0)
+            {
+                DrawZoomBlur(g, img, x, y, baseW, baseH, zoomBlurIntensity, opacity);
+            }
+            else if (opacity < 0.99f)
+            {
+                using (var attributes = new ImageAttributes())
+                {
+                    var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity)) };
+                    attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+                    g.DrawImage(img, new Rectangle(x, y, baseW, baseH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
+                }
+            }
+            else
+            {
+                g.DrawImage(img, x, y, baseW, baseH);
+            }
+
+            g.ResetClip();
+            g.DrawRectangle(Pens.Gray, canvasX, canvasY, canvasWidth, canvasHeight); // Outer border overlay
+        }
+
+        private void DrawZoomBlur(Graphics g, Image img, int x, int y, int width, int height, float intensity, float baseOpacity)
+        {
+            int samples = 8;
+            float maxScale = 1.0f + (intensity * 0.7f);
+            int centerX = x + (width / 2);
+            int centerY = y + (height / 2);
+
+            for (int i = 0; i < samples; i++)
+            {
+                float stepProgress = (float)i / (samples - 1);
+                float currentScale = 1.0f + (maxScale - 1.0f) * stepProgress;
+
+                int stepW = (int)(width * currentScale);
+                int stepH = (int)(height * currentScale);
+                int stepX = centerX - (stepW / 2);
+                int stepY = centerY - (stepH / 2);
+
+                using (var attributes = new ImageAttributes())
+                {
+                    var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, baseOpacity / samples)) };
+                    attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+
+                    g.DrawImage(img, new Rectangle(stepX, stepY, stepW, stepH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
+                }
+            }
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) currentImage?.Dispose();
-            base.Dispose(disposing);
+            if (disposing) currentImage?.Dispose(); base.Dispose(disposing);
         }
     }
 }

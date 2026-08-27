@@ -25,6 +25,7 @@ namespace VideoEditor.Controls
 
         public event Action<double> TimeChanged;
         public event Action<MediaItem> ClipSelected;
+        public event Action<MediaItem> ItemResized; // <--- Notifies MainForm during drag-resizing
 
         public MediaItem SelectedItem { get; private set; }
 
@@ -181,6 +182,10 @@ namespace VideoEditor.Controls
                 // Dragging right edge adjusts duration dynamically
                 double newDuration = (e.X / pixelsPerSecond) - activeClip.StartTime;
                 activeClip.Duration = Math.Max(0.5, newDuration); // Prevent 0-length clips
+
+                // Fire live resize event to trigger auto-split duration updates in MainForm
+                ItemResized?.Invoke(activeClip);
+
                 this.Invalidate();
                 TimeChanged?.Invoke(currentTime);
             }

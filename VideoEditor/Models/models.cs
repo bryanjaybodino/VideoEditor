@@ -12,6 +12,12 @@ namespace VideoEditor.Models
         Video
     }
 
+    public class TransitionEffect
+    {
+        public string Type { get; set; } = "None"; // "None", "Fade", "Slide", "Wave", "Zoom"
+        public double Duration { get; set; } = 0.5; // Duration in seconds
+    }
+
     public class MediaItem
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();
@@ -20,15 +26,12 @@ namespace VideoEditor.Models
         public double Duration { get; set; } = 3.0; // Duration in seconds
         public double StartTime { get; set; } = 0.0; // Timeline offset in seconds
         public int TrackIndex { get; set; } = 0;     // 0 = Image Track, 1 = Audio Track
-        public TransitionEffect InEffect { get; set; }
-        public TransitionEffect OutEffect { get; set; }
-        public List<TextLabel> TextLabels { get; set; } = new List<TextLabel>();
-    }
 
-    public class TransitionEffect
-    {
-        public string Type { get; set; } // "Slide", "Wave", "Fade"
-        public double Duration { get; set; } = 0.5;
+        // In (Entrance) and Out (Exit) animations
+        public TransitionEffect InEffect { get; set; } = new TransitionEffect { Type = "Fade", Duration = 0.5 };
+        public TransitionEffect OutEffect { get; set; } = new TransitionEffect { Type = "None", Duration = 0.5 };
+
+        public List<TextLabel> TextLabels { get; set; } = new List<TextLabel>();
     }
 
     public class TextLabel

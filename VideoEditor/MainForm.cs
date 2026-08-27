@@ -34,9 +34,16 @@ namespace VideoEditor
         private Button btnPlayPause;
         private string currentAudioPath = null;
 
-        // Debouncing timer to smooth out scrubbing audio updates
         private Timer scrubAudioTimer;
         private double pendingScrubTime = -1;
+
+        // Animation UI Controls
+        private NumericUpDown numDuration;
+        private ComboBox cbInEffect;
+        private NumericUpDown numInDuration;
+        private ComboBox cbOutEffect;
+        private NumericUpDown numOutDuration;
+        private bool isBindingUI = false;
 
         public MainForm()
         {
@@ -50,10 +57,9 @@ namespace VideoEditor
 
         private void InitializePlaybackEngine()
         {
-            playbackTimer = new Timer { Interval = 33 }; // ~30 FPS
+            playbackTimer = new Timer { Interval = 33 };
             playbackTimer.Tick += (s, e) =>
             {
-                // Advance frame counter naturally during normal playback
                 timelineControl.CurrentTime += 0.033;
 
                 var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
@@ -73,7 +79,6 @@ namespace VideoEditor
                 }
             };
 
-            // Throttles manual audio seeks to prevent driver flickering
             scrubAudioTimer = new Timer { Interval = 60 };
             scrubAudioTimer.Tick += (s, e) =>
             {
@@ -88,7 +93,7 @@ namespace VideoEditor
 
         private void InitializeUI()
         {
-            this.Text = "VideoEditor - Slideshow Video Maker";
+            this.Text = "VideoEditor - Mobile Slideshow Video Maker";
             this.Size = new Size(1400, 900);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.FromArgb(25, 25, 25);
@@ -100,9 +105,10 @@ namespace VideoEditor
                 RowCount = 3
             };
 
+            // Mobile-Optimized Grid Dimensions (20% Left, 55% Center Canvas, 25% Right Controls)
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
 
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -118,17 +124,15 @@ namespace VideoEditor
             previewControl = new PreviewControl { Dock = DockStyle.Fill };
             mainLayout.Controls.Add(previewControl, 1, 1);
 
-            var rightPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(35, 35, 35) };
+            var rightPanel = CreateActionSidebar();
             mainLayout.Controls.Add(rightPanel, 2, 1);
 
             timelineControl = new TimelineControl(mediaItems) { Dock = DockStyle.Fill };
 
-            // Handle scrubbing safely
             timelineControl.TimeChanged += (time) =>
             {
                 previewControl.RenderFrame(mediaItems, time);
 
-                // Only perform audio seeks when the position change was triggered by the user (scrubbing/clicking)
                 if (!isPlaying || isUserScrubbing)
                 {
                     pendingScrubTime = time;
@@ -137,22 +141,346 @@ namespace VideoEditor
                 }
             };
 
-            // Detect mouse interaction on timeline control to safely isolate manual scrubbing
+            // Sync Timeline item click event with Sidebar Controls
+            timelineControl.ClipSelected += (selectedItem) =>
+            {
+                BindSelectedMediaToUI(selectedItem);
+            };
+
+            // Hook up live drag-resizing event from TimelineControl
+            timelineControl.ItemResized += (resizedItem) =>
+            {
+                TimelineControl_ItemResized(timelineControl, resizedItem);
+            };
+
             timelineControl.MouseDown += (s, e) => { isUserScrubbing = true; };
             timelineControl.MouseUp += (s, e) =>
             {
                 isUserScrubbing = false;
-                if (isPlaying)
-                {
-                    // Resume smooth playback immediately after scrubbing release
-                    StartPlayback();
-                }
+                if (isPlaying) StartPlayback();
             };
 
             mainLayout.Controls.Add(timelineControl, 0, 2);
             mainLayout.SetColumnSpan(timelineControl, 3);
 
             this.Controls.Add(mainLayout);
+        }
+
+        private Control CreateActionSidebar()
+        {
+            var panel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(35, 35, 35),
+                Padding = new Padding(15),
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoScroll = true
+            };
+
+            panel.Controls.Add(new Label
+            {
+                Text = "Editing Actions",
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 10)
+            });
+
+            // Split Controls
+            panel.Controls.Add(CreateActionButton("✂ Split Clip", () => SplitSelectedClip()));
+            panel.Controls.Add(CreateActionButton("✂◄ Split Left (Trim Left)", () => SplitLeftSelectedClip()));
+            panel.Controls.Add(CreateActionButton("►✂ Split Right (Trim Right)", () => SplitRightSelectedClip()));
+
+            panel.Controls.Add(new Label { Height = 1, Width = 220, BackColor = Color.Gray, Margin = new Padding(0, 10, 0, 10) });
+
+            // Total Image Duration
+            panel.Controls.Add(CreateSectionHeader("Total Clip Duration (s)"));
+            numDuration = CreateNumberInput();
+            numDuration.ValueChanged += NumDuration_ValueChanged;
+            panel.Controls.Add(numDuration);
+
+            panel.Controls.Add(new Label { Height = 1, Width = 220, BackColor = Color.Gray, Margin = new Padding(0, 10, 0, 10) });
+
+            // IN (Entrance) Animation
+            panel.Controls.Add(CreateSectionHeader("In Animation (Entrance)"));
+            cbInEffect = CreateEffectDropdown();
+            cbInEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
+            panel.Controls.Add(cbInEffect);
+
+            panel.Controls.Add(CreateSubLabel("In Duration (s):"));
+            numInDuration = CreateNumberInput();
+            numInDuration.ReadOnly = true; // Auto-calculated (50% Split)
+            panel.Controls.Add(numInDuration);
+
+            // OUT (Exit) Animation
+            panel.Controls.Add(CreateSectionHeader("Out Animation (Exit)"));
+            cbOutEffect = CreateEffectDropdown();
+            cbOutEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
+            panel.Controls.Add(cbOutEffect);
+
+            panel.Controls.Add(CreateSubLabel("Out Duration (s):"));
+            numOutDuration = CreateNumberInput();
+            numOutDuration.ReadOnly = true; // Auto-calculated (50% Split)
+            panel.Controls.Add(numOutDuration);
+
+            return panel;
+        }
+
+        private void BindSelectedMediaToUI(MediaItem item)
+        {
+            if (item == null || item.Type != MediaType.Image) return;
+
+            isBindingUI = true;
+
+            // Load clip duration
+            numDuration.Value = (decimal)item.Duration;
+
+            // Set drop-downs
+            cbInEffect.SelectedItem = item.InEffect?.Type ?? "None";
+            cbOutEffect.SelectedItem = item.OutEffect?.Type ?? "None";
+
+            // Re-calculate 50/50 split on selection
+            UpdateSplitEffectDurations(item);
+
+            numInDuration.Value = (decimal)(item.InEffect?.Duration ?? 0);
+            numOutDuration.Value = (decimal)(item.OutEffect?.Duration ?? 0);
+
+            isBindingUI = false;
+        }
+
+        // Helper method: Splits image duration 50/50 and assigns it to In and Out effects
+        private void UpdateSplitEffectDurations(MediaItem item)
+        {
+            if (item == null || item.Type != MediaType.Image) return;
+
+            double halfDuration = Math.Round(item.Duration / 2.0, 2);
+
+            if (item.InEffect != null)
+            {
+                item.InEffect.Duration = halfDuration;
+            }
+
+            if (item.OutEffect != null)
+            {
+                item.OutEffect.Duration = halfDuration;
+            }
+        }
+
+        // Triggered when editing the numerical input
+        private void NumDuration_ValueChanged(object sender, EventArgs e)
+        {
+            if (isBindingUI) return;
+
+            var item = timelineControl.SelectedItem;
+            if (item != null && item.Type == MediaType.Image)
+            {
+                item.Duration = (double)numDuration.Value;
+
+                UpdateSplitEffectDurations(item);
+
+                isBindingUI = true;
+                numInDuration.Value = (decimal)item.InEffect.Duration;
+                numOutDuration.Value = (decimal)item.OutEffect.Duration;
+                isBindingUI = false;
+
+                RefreshTimeline();
+            }
+        }
+
+        // Triggered dynamically during timeline clip edge dragging
+        private void TimelineControl_ItemResized(object sender, MediaItem item)
+        {
+            if (item != null && item.Type == MediaType.Image)
+            {
+                UpdateSplitEffectDurations(item);
+
+                if (timelineControl.SelectedItem == item)
+                {
+                    isBindingUI = true;
+                    numDuration.Value = (decimal)item.Duration;
+                    numInDuration.Value = (decimal)item.InEffect.Duration;
+                    numOutDuration.Value = (decimal)item.OutEffect.Duration;
+                    isBindingUI = false;
+                }
+
+                RefreshTimeline();
+            }
+        }
+
+        private void SaveAnimationSettings()
+        {
+            if (isBindingUI) return;
+
+            var item = timelineControl.SelectedItem;
+            if (item != null && item.Type == MediaType.Image)
+            {
+                item.InEffect.Type = cbInEffect.SelectedItem?.ToString() ?? "None";
+                item.OutEffect.Type = cbOutEffect.SelectedItem?.ToString() ?? "None";
+
+                UpdateSplitEffectDurations(item);
+
+                isBindingUI = true;
+                numInDuration.Value = (decimal)item.InEffect.Duration;
+                numOutDuration.Value = (decimal)item.OutEffect.Duration;
+                isBindingUI = false;
+
+                RefreshTimeline();
+            }
+        }
+
+        private void AddMediaItem(string filePath, MediaType type)
+        {
+            double duration = 4.0;
+            double nextStartTime = 0;
+
+            if (type == MediaType.Audio)
+            {
+                duration = GetAudioDuration(filePath);
+            }
+            else if (type == MediaType.Image)
+            {
+                var lastImage = mediaItems.Where(x => x.Type == MediaType.Image).LastOrDefault();
+                if (lastImage != null) nextStartTime = lastImage.StartTime + lastImage.Duration;
+            }
+
+            double halfDuration = duration / 2.0;
+
+            var item = new MediaItem
+            {
+                FilePath = filePath,
+                Type = type,
+                Duration = duration,
+                StartTime = nextStartTime,
+                InEffect = new TransitionEffect { Type = "ZoomBlurUp", Duration = halfDuration },
+                OutEffect = new TransitionEffect { Type = "ZoomBlurDown", Duration = halfDuration }
+            };
+
+            mediaItems.Add(item);
+            mediaListBox.Items.Add(Path.GetFileName(filePath));
+            RefreshTimeline();
+        }
+
+        private Label CreateSectionHeader(string text) => new Label { Text = text, ForeColor = Color.Yellow, Font = new Font("Segoe UI", 9, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 8, 0, 3) };
+        private Label CreateSubLabel(string text) => new Label { Text = text, ForeColor = Color.LightGray, Font = new Font("Segoe UI", 8), AutoSize = true, Margin = new Padding(0, 4, 0, 2) };
+
+        private ComboBox CreateEffectDropdown()
+        {
+            var cb = new ComboBox
+            {
+                Width = 220,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(55, 55, 55),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            cb.Items.AddRange(new object[] {
+                "None",
+                "Fade",
+                "Slide",
+                "Wave",
+                "Zoom",
+                "ZoomBlur",
+                "ZoomBlurUp",
+                "ZoomBlurDown",
+                "ZoomBlurLeft",
+                "ZoomBlurRight"
+            });
+
+            cb.SelectedIndex = 0;
+            return cb;
+        }
+
+        private NumericUpDown CreateNumberInput()
+        {
+            return new NumericUpDown { Width = 220, Minimum = 0.5m, Maximum = 60.0m, DecimalPlaces = 1, Increment = 0.5m, BackColor = Color.FromArgb(55, 55, 55), ForeColor = Color.White };
+        }
+
+        private Button CreateActionButton(string text, Action onClick)
+        {
+            var btn = new Button
+            {
+                Text = text,
+                Width = 220,
+                Height = 32,
+                BackColor = Color.FromArgb(50, 50, 50),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(8, 0, 0, 0),
+                Margin = new Padding(0, 0, 0, 5),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular)
+            };
+            btn.FlatAppearance.BorderSize = 1;
+            btn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 70);
+            btn.Click += (s, e) => onClick?.Invoke();
+            return btn;
+        }
+
+        private void SplitSelectedClip()
+        {
+            var item = timelineControl.SelectedItem;
+            double playhead = timelineControl.CurrentTime;
+
+            if (item != null && playhead > item.StartTime && playhead < (item.StartTime + item.Duration))
+            {
+                double splitPointRelative = playhead - item.StartTime;
+                double originalDuration = item.Duration;
+
+                item.Duration = splitPointRelative;
+                UpdateSplitEffectDurations(item);
+
+                var newItem = new MediaItem
+                {
+                    FilePath = item.FilePath,
+                    Type = item.Type,
+                    StartTime = playhead,
+                    Duration = originalDuration - splitPointRelative,
+                    InEffect = new TransitionEffect { Type = item.InEffect.Type },
+                    OutEffect = new TransitionEffect { Type = item.OutEffect.Type }
+                };
+
+                UpdateSplitEffectDurations(newItem);
+
+                mediaItems.Add(newItem);
+                mediaListBox.Items.Add(Path.GetFileName(newItem.FilePath));
+                RefreshTimeline();
+            }
+        }
+
+        private void SplitLeftSelectedClip()
+        {
+            var item = timelineControl.SelectedItem;
+            double playhead = timelineControl.CurrentTime;
+
+            if (item != null && playhead > item.StartTime && playhead < (item.StartTime + item.Duration))
+            {
+                double cutAmount = playhead - item.StartTime;
+                item.StartTime = playhead;
+                item.Duration -= cutAmount;
+                UpdateSplitEffectDurations(item);
+                RefreshTimeline();
+            }
+        }
+
+        private void SplitRightSelectedClip()
+        {
+            var item = timelineControl.SelectedItem;
+            double playhead = timelineControl.CurrentTime;
+
+            if (item != null && playhead > item.StartTime && playhead < (item.StartTime + item.Duration))
+            {
+                item.Duration = playhead - item.StartTime;
+                UpdateSplitEffectDurations(item);
+                RefreshTimeline();
+            }
+        }
+
+        private void RefreshTimeline()
+        {
+            timelineControl.Invalidate();
+            previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
         }
 
         private string GetShortPath(string path)
@@ -210,24 +538,7 @@ namespace VideoEditor
                 Padding = new Padding(10)
             };
 
-            toolbar.Controls.Add(CreateStyledButton("Add Images", () =>
-            {
-                using (var ofd = new OpenFileDialog { Filter = "Image Files|*.jpg;*.jpeg;*.png;*.bmp", Multiselect = true })
-                {
-                    if (ofd.ShowDialog() == DialogResult.OK)
-                    {
-                        foreach (var file in ofd.FileNames) AddMediaItem(file, MediaType.Image);
-                    }
-                }
-            }));
-
-            toolbar.Controls.Add(CreateStyledButton("Add Audio", () =>
-            {
-                using (var ofd = new OpenFileDialog { Filter = "Audio Files|*.mp3;*.wav;*.m4a" })
-                {
-                    if (ofd.ShowDialog() == DialogResult.OK) AddMediaItem(ofd.FileName, MediaType.Audio);
-                }
-            }));
+            toolbar.Controls.Add(CreateStyledButton("📁 Import Files", () => ImportFiles()));
 
             btnPlayPause = CreateStyledButton("▶ Play", () => TogglePlayback());
             toolbar.Controls.Add(btnPlayPause);
@@ -257,6 +568,33 @@ namespace VideoEditor
             }));
 
             return toolbar;
+        }
+
+        private void ImportFiles()
+        {
+            using (var ofd = new OpenFileDialog
+            {
+                Filter = "Supported Media Files|*.jpg;*.jpeg;*.png;*.bmp;*.mp3;*.wav;*.m4a|Image Files|*.jpg;*.jpeg;*.png;*.bmp|Audio Files|*.mp3;*.wav;*.m4a",
+                Multiselect = true
+            })
+            {
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    foreach (var file in ofd.FileNames)
+                    {
+                        string ext = Path.GetExtension(file).ToLower();
+
+                        if (new[] { ".jpg", ".jpeg", ".png", ".bmp" }.Contains(ext))
+                        {
+                            AddMediaItem(file, MediaType.Image);
+                        }
+                        else if (new[] { ".mp3", ".wav", ".m4a" }.Contains(ext))
+                        {
+                            AddMediaItem(file, MediaType.Audio);
+                        }
+                    }
+                }
+            }
         }
 
         private void TogglePlayback()
@@ -299,36 +637,6 @@ namespace VideoEditor
             mediaListBox = new ListBox { Dock = DockStyle.Fill, BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White };
             panel.Controls.Add(mediaListBox);
             return panel;
-        }
-
-        private void AddMediaItem(string filePath, MediaType type)
-        {
-            double duration = 3.0;
-            double nextStartTime = 0;
-
-            if (type == MediaType.Audio)
-            {
-                duration = GetAudioDuration(filePath);
-            }
-            else if (type == MediaType.Image)
-            {
-                var lastImage = mediaItems.Where(x => x.Type == MediaType.Image).LastOrDefault();
-                if (lastImage != null) nextStartTime = lastImage.StartTime + lastImage.Duration;
-            }
-
-            var item = new MediaItem
-            {
-                FilePath = filePath,
-                Type = type,
-                Duration = duration,
-                StartTime = nextStartTime,
-                InEffect = new TransitionEffect { Type = mediaItems.Count % 2 == 0 ? "Slide" : "Wave", Duration = 0.5 }
-            };
-
-            mediaItems.Add(item);
-            mediaListBox.Items.Add(Path.GetFileName(filePath));
-            timelineControl.Invalidate();
-            previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
         }
 
         private double GetAudioDuration(string filePath)
