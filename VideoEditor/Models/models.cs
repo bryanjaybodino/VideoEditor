@@ -35,6 +35,10 @@ namespace VideoEditor.Models
         public TransitionEffect OutEffect { get; set; } = new TransitionEffect { Type = "None", Duration = 0.5 };
 
         public List<TextLabel> TextLabels { get; set; } = new List<TextLabel>();
+
+        public float Scale { get; set; } = 1.0f; // Scale multiplier (1.0 = 100%)
+        public float PositionX { get; set; } = 0.0f; // Offset X from center
+        public float PositionY { get; set; } = 0.0f; // Offset Y from center
     }
 
     public class TextLabel
@@ -67,5 +71,18 @@ namespace VideoEditor.Models
         public int SelectedItemIndex { get; set; } = -1;
         public string ProjectName { get; set; } = "Untitled Project";
         public DateTime CreatedDate { get; set; } = DateTime.Now;
+    }
+    public enum EffectType
+    {
+        Blur
+    }
+
+    public class EffectItem
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString();
+        public EffectType Type { get; set; } = EffectType.Blur;
+        public double StartTime { get; set; }
+        public double Duration { get; set; } = 3.0; // Default 3 seconds
+        public float Intensity { get; set; } = 10.0f; // Blur strength
     }
 }

@@ -6,6 +6,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using VideoEditor.Models;
 
@@ -17,8 +18,16 @@ namespace VideoEditor.Services
         private const int OutputHeight = 1920;
         private const int TargetFps = 30;
 
-        public async Task ExportToVideo(List<MediaItem> items, string outputPath, Action<double, Graphics> renderPreviewFrame)
+        public async Task ExportToVideo(List<MediaItem> items, string outputPath, Action<double, Graphics> renderPreviewFrame, IProgress<int> progress = null)
         {
+            // 1. Verify FFmpeg binary location
+            string ffmpegExePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ffmpeg.exe");
+            if (!File.Exists(ffmpegExePath))
+            {
+                // Fallback to system PATH environment
+                ffmpegExePath = "ffmpeg.exe";
+            }
+
             var imageItems = items.Where(x => x.Type == MediaType.Image).ToList();
             var audioItem = items.FirstOrDefault(x => x.Type == MediaType.Audio);
 
@@ -27,6 +36,9 @@ namespace VideoEditor.Services
 
             double totalDuration = items.Max(x => x.StartTime + x.Duration);
             int totalFrames = (int)(totalDuration * TargetFps);
+
+            if (totalFrames <= 0)
+                throw new Exception("Total video duration is invalid or 0 seconds.");
 
             string tempOutputFile = Path.Combine(Path.GetTempPath(), $"export_{Guid.NewGuid():N}.mp4");
 
@@ -42,14 +54,13 @@ namespace VideoEditor.Services
                 audioArgs = "-map 0:v";
             }
 
-            // Pipe raw video frames directly into FFmpeg
             string arguments = $"-y -f rawvideo -vcodec rawvideo -s {OutputWidth}x{OutputHeight} -pix_fmt bgr24 -r {TargetFps} -i - {audioArgs} -t {totalDuration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -c:v libx264 -preset ultrafast -pix_fmt yuv420p \"{tempOutputFile}\"";
 
             await Task.Run(() =>
             {
                 var psi = new ProcessStartInfo
                 {
-                    FileName = "ffmpeg.exe",
+                    FileName = ffmpegExePath,
                     Arguments = arguments,
                     UseShellExecute = false,
                     RedirectStandardInput = true,
@@ -57,8 +68,30 @@ namespace VideoEditor.Services
                     CreateNoWindow = true
                 };
 
-                using (var process = Process.Start(psi))
+                var errorBuilder = new StringBuilder();
+
+                using (var process = new Process { StartInfo = psi })
                 {
+                    // Asynchronously log FFmpeg error messages to prevent pipe buffer deadlocks
+                    process.ErrorDataReceived += (s, e) =>
+                    {
+                        if (!string.IsNullOrEmpty(e.Data))
+                        {
+                            errorBuilder.AppendLine(e.Data);
+                        }
+                    };
+
+                    try
+                    {
+                        process.Start();
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new Exception($"Failed to start ffmpeg.exe. Ensure 'ffmpeg.exe' exists in application directory.\nDetails: {ex.Message}");
+                    }
+
+                    process.BeginErrorReadLine();
+
                     using (Stream ffmpegIn = process.StandardInput.BaseStream)
                     using (Bitmap frameBuffer = new Bitmap(OutputWidth, OutputHeight, PixelFormat.Format24bppRgb))
                     using (Graphics g = Graphics.FromImage(frameBuffer))
@@ -67,18 +100,18 @@ namespace VideoEditor.Services
                         g.SmoothingMode = SmoothingMode.HighQuality;
                         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
-                        // Render frame by frame matching the exact preview math
                         for (int frame = 0; frame < totalFrames; frame++)
                         {
+                            if (process.HasExited)
+                            {
+                                throw new Exception($"FFmpeg closed unexpectedly at frame {frame}/{totalFrames}.\nError Output:\n{errorBuilder}");
+                            }
+
                             double timeInSeconds = (double)frame / TargetFps;
 
-                            // Clear canvas
                             g.Clear(Color.Black);
-
-                            // Delegate rendering to your existing UI preview render logic
                             renderPreviewFrame(timeInSeconds, g);
 
-                            // Write raw bitmap bytes directly into FFmpeg process stdin
                             BitmapData bmpData = frameBuffer.LockBits(
                                 new Rectangle(0, 0, OutputWidth, OutputHeight),
                                 ImageLockMode.ReadOnly,
@@ -90,29 +123,43 @@ namespace VideoEditor.Services
                                 System.Runtime.InteropServices.Marshal.Copy(bmpData.Scan0, bytes, 0, bytes.Length);
                                 ffmpegIn.Write(bytes, 0, bytes.Length);
                             }
+                            catch (Exception ex)
+                            {
+                                throw new Exception($"Failed writing frame {frame} to FFmpeg stdin stream.\nError: {ex.Message}");
+                            }
                             finally
                             {
                                 frameBuffer.UnlockBits(bmpData);
                             }
+
+                            int percent = (int)(((double)(frame + 1) / totalFrames) * 100);
+                            progress?.Report(percent);
                         }
 
                         ffmpegIn.Flush();
+                        ffmpegIn.Close();
                     }
 
-                    string errorLog = process.StandardError.ReadToEnd();
                     process.WaitForExit();
 
                     if (process.ExitCode != 0)
                     {
-                        throw new Exception($"FFmpeg Export Failed:\n{errorLog}");
+                        throw new Exception($"FFmpeg Export Failed with Exit Code {process.ExitCode}:\n{errorBuilder}");
                     }
                 }
             });
 
+            // Move exported temp file to final user target location
             if (File.Exists(tempOutputFile))
             {
-                if (File.Exists(outputPath)) File.Delete(outputPath);
+                if (File.Exists(outputPath))
+                    File.Delete(outputPath);
+
                 File.Move(tempOutputFile, outputPath);
+            }
+            else
+            {
+                throw new Exception("Export failed: Output MP4 file was not created by FFmpeg.");
             }
         }
     }

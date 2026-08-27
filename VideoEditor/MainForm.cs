@@ -5,8 +5,9 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Windows.Media; // Add reference to PresentationCore and WindowsBase
+using System.Windows.Media;
 using VideoEditor.Controls;
 using VideoEditor.Models;
 using Color = System.Drawing.Color;
@@ -31,14 +32,12 @@ namespace VideoEditor
         private bool isUserScrubbing = false;
         private Button btnPlayPause;
 
-        // Native WPF MediaPlayer engine (Handles MP3/WAV/M4A mid-stream seeking accurately)
         private MediaPlayer audioPlayer = new MediaPlayer();
         private string currentAudioPath = null;
 
         private Timer scrubAudioTimer;
         private double pendingScrubTime = -1;
 
-        // Animation UI Controls
         private NumericUpDown numDuration;
         private ComboBox cbInEffect;
         private NumericUpDown numInDuration;
@@ -208,7 +207,9 @@ namespace VideoEditor
 
             timelineControl.ClipSelected += (selectedItem) =>
             {
+                previewControl.SelectedItem = selectedItem;
                 BindSelectedMediaToUI(selectedItem);
+                previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
             };
 
             timelineControl.ItemResized += (resizedItem) =>
@@ -328,6 +329,9 @@ namespace VideoEditor
             var item = timelineControl.SelectedItem;
             if (item != null && item.Type == MediaType.Image)
             {
+                if (item.InEffect == null) item.InEffect = new TransitionEffect();
+                if (item.OutEffect == null) item.OutEffect = new TransitionEffect();
+
                 item.InEffect.Type = cbInEffect.SelectedItem?.ToString() ?? "None";
                 item.OutEffect.Type = cbOutEffect.SelectedItem?.ToString() ?? "None";
 
@@ -364,8 +368,8 @@ namespace VideoEditor
                 FilePath = filePath,
                 Type = type,
                 Duration = duration,
-                OriginalDuration = duration, // <--- Add this line
-                SourceOffset = 0,             // <--- Add this line
+                OriginalDuration = duration,
+                SourceOffset = 0,
                 StartTime = nextStartTime,
                 InEffect = new TransitionEffect { Type = "ZoomBlurUp", Duration = halfDuration },
                 OutEffect = new TransitionEffect { Type = "ZoomBlurDown", Duration = halfDuration }
@@ -520,10 +524,9 @@ namespace VideoEditor
             {
                 double cutAmount = playhead - item.StartTime;
 
-                // Maintain original untrimmed duration reference
                 if (item.OriginalDuration <= 0) item.OriginalDuration = item.Duration;
 
-                item.SourceOffset += cutAmount; // Shift waveform rendering window
+                item.SourceOffset += cutAmount;
                 item.StartTime = playhead;
                 item.Duration -= cutAmount;
 
@@ -545,6 +548,7 @@ namespace VideoEditor
                 RefreshTimeline();
             }
         }
+
         private void RefreshTimeline()
         {
             timelineControl.Invalidate();
@@ -570,39 +574,44 @@ namespace VideoEditor
             toolbar.Controls.Add(CreateStyledButton("Export Video", async () =>
             {
                 PausePlayback();
+
                 using (var sfd = new SaveFileDialog { Filter = "MP4 Video|*.mp4", DefaultExt = ".mp4" })
                 {
                     if (sfd.ShowDialog() == DialogResult.OK)
                     {
-                        this.Enabled = false;
-                        this.UseWaitCursor = true;
-
-                        try
+                        // 1. Create dialog
+                        using (var progressForm = new ProgressForm())
                         {
-                            await exportService.ExportToVideo(mediaItems, sfd.FileName, (time, g) =>
+                            // 2. Prepare progress instance that marshals UI updates safely
+                            var progress = new Progress<int>(percent =>
                             {
-                                RenderPreviewAtTime(time, g, new Size(1080, 1920));
+                                progressForm.UpdateProgress(percent, $"Rendering & encoding video... {percent}%");
                             });
 
-                            this.Invoke((MethodInvoker)delegate
+                            // 3. Show dialog modally or keep reference active during await
+                            progressForm.Show(this);
+                            this.Enabled = false; // Disable main window during export
+
+                            try
                             {
-                                MessageBox.Show(this, "Video exported successfully!", "Export Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            this.Invoke((MethodInvoker)delegate
-                            {
-                                MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            });
-                        }
-                        finally
-                        {
-                            this.Invoke((MethodInvoker)delegate
-                            {
+                                // 4. Await the full render + FFmpeg encoding process
+                                await exportService.ExportToVideo(mediaItems, sfd.FileName, (time, g) =>
+                                {
+                                    RenderPreviewAtTime(time, g, new Size(1080, 1920));
+                                }, progress);
+
+                                progressForm.Close();
                                 this.Enabled = true;
-                                this.UseWaitCursor = false;
-                            });
+
+                                MessageBox.Show(this, "Video exported successfully!", "Export Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            }
+                            catch (Exception ex)
+                            {
+                                progressForm.Close();
+                                this.Enabled = true;
+
+                                MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            }
                         }
                     }
                 }
@@ -614,196 +623,210 @@ namespace VideoEditor
         {
             g.Clear(Color.Black);
 
-            var activeItem = mediaItems.FirstOrDefault(item =>
-                item.Type == MediaType.Image &&
-                timePosition >= item.StartTime &&
-                timePosition < item.StartTime + item.Duration);
+            var activeItems = mediaItems
+                .Where(item => item.Type == MediaType.Image &&
+                               timePosition >= item.StartTime &&
+                               timePosition < item.StartTime + item.Duration)
+                .OrderByDescending(item => item.TrackIndex)
+                .ToList();
 
-            if (activeItem == null || !File.Exists(activeItem.FilePath))
+            if (activeItems.Count == 0)
                 return;
 
-            using (var img = Image.FromFile(activeItem.FilePath))
+            float targetAspect = 9.0f / 16.0f;
+            int canvasWidth = canvasSize.Width;
+            int canvasHeight = canvasSize.Height;
+
+            if ((float)canvasWidth / canvasHeight > targetAspect)
             {
-                float targetAspect = 9.0f / 16.0f;
-                int canvasWidth = canvasSize.Width;
-                int canvasHeight = canvasSize.Height;
+                canvasWidth = (int)(canvasHeight * targetAspect);
+            }
+            else
+            {
+                canvasHeight = (int)(canvasWidth / targetAspect);
+            }
 
-                if ((float)canvasWidth / canvasHeight > targetAspect)
+            int canvasX = (canvasSize.Width - canvasWidth) / 2;
+            int canvasY = (canvasSize.Height - canvasHeight) / 2;
+
+            g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
+
+            foreach (var activeItem in activeItems)
+            {
+                if (!File.Exists(activeItem.FilePath)) continue;
+
+                using (var img = Image.FromFile(activeItem.FilePath))
                 {
-                    canvasWidth = (int)(canvasHeight * targetAspect);
-                }
-                else
-                {
-                    canvasHeight = (int)(canvasWidth / targetAspect);
-                }
+                    float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * activeItem.Scale;
+                    int baseW = (int)(img.Width * scale);
+                    int baseH = (int)(img.Height * scale);
 
-                int canvasX = (canvasSize.Width - canvasWidth) / 2;
-                int canvasY = (canvasSize.Height - canvasHeight) / 2;
+                    float offsetXRatio = activeItem.PositionX / (previewControl.LastCanvasWidth > 0 ? previewControl.LastCanvasWidth : canvasWidth);
+                    float offsetYRatio = activeItem.PositionY / (previewControl.LastCanvasHeight > 0 ? previewControl.LastCanvasHeight : canvasHeight);
 
-                float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height);
-                int baseW = (int)(img.Width * scale);
-                int baseH = (int)(img.Height * scale);
-                int originX = canvasX + (canvasWidth - baseW) / 2;
-                int originY = canvasY + (canvasHeight - baseH) / 2;
+                    int scaledOffsetX = (int)(offsetXRatio * canvasWidth);
+                    int scaledOffsetY = (int)(offsetYRatio * canvasHeight);
 
-                int x = originX;
-                int y = originY;
+                    int originX = canvasX + (canvasWidth - baseW) / 2 + scaledOffsetX;
+                    int originY = canvasY + (canvasHeight - baseH) / 2 + scaledOffsetY;
 
-                g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
+                    int x = originX;
+                    int y = originY;
 
-                double localTime = timePosition - activeItem.StartTime;
-                double remainingTime = activeItem.Duration - localTime;
+                    double localTime = timePosition - activeItem.StartTime;
+                    double remainingTime = activeItem.Duration - localTime;
 
-                float opacity = 1.0f;
-                float zoomFactor = 1.0f;
-                float zoomBlurIntensity = 0.0f;
+                    float opacity = 1.0f;
+                    float zoomFactor = 1.0f;
+                    float zoomBlurIntensity = 0.0f;
 
-                // --- IN ANIMATION ---
-                double inDur = activeItem.InEffect?.Duration ?? 0;
-                if (localTime >= 0 && localTime < inDur && inDur > 0 && activeItem.InEffect != null)
-                {
-                    float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(localTime / inDur)));
-                    float invertProgress = 1.0f - progress;
-
-                    switch (activeItem.InEffect.Type)
+                    // --- IN ANIMATION ---
+                    double inDur = activeItem.InEffect?.Duration ?? 0;
+                    if (localTime >= 0 && localTime < inDur && inDur > 0 && activeItem.InEffect != null)
                     {
-                        case "Fade":
-                            opacity *= progress;
-                            break;
-                        case "Slide":
-                            x = (int)(originX - canvasWidth + (canvasWidth * progress));
-                            break;
-                        case "Wave":
-                            y += (int)(Math.Sin(progress * Math.PI * 4) * 15);
-                            break;
-                        case "Zoom":
-                            zoomFactor *= (0.5f + 0.5f * progress);
-                            break;
-                        case "ZoomBlur":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            break;
-                        case "ZoomBlurUp":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            y -= (int)(canvasHeight * invertProgress);
-                            break;
-                        case "ZoomBlurDown":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            y += (int)(canvasHeight * invertProgress);
-                            break;
-                        case "ZoomBlurLeft":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            x -= (int)(canvasWidth * invertProgress);
-                            break;
-                        case "ZoomBlurRight":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            x += (int)(canvasWidth * invertProgress);
-                            break;
+                        float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(localTime / inDur)));
+                        float invertProgress = 1.0f - progress;
+
+                        switch (activeItem.InEffect.Type)
+                        {
+                            case "Fade":
+                                opacity *= progress;
+                                break;
+                            case "Slide":
+                                x = (int)(originX - canvasWidth + (canvasWidth * progress));
+                                break;
+                            case "Wave":
+                                y += (int)(Math.Sin(progress * Math.PI * 4) * 15);
+                                break;
+                            case "Zoom":
+                                zoomFactor *= (0.5f + 0.5f * progress);
+                                break;
+                            case "ZoomBlur":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                break;
+                            case "ZoomBlurUp":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                y -= (int)(canvasHeight * invertProgress);
+                                break;
+                            case "ZoomBlurDown":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                y += (int)(canvasHeight * invertProgress);
+                                break;
+                            case "ZoomBlurLeft":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                x -= (int)(canvasWidth * invertProgress);
+                                break;
+                            case "ZoomBlurRight":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                x += (int)(canvasWidth * invertProgress);
+                                break;
+                        }
                     }
-                }
 
-                // --- OUT ANIMATION ---
-                double outDur = activeItem.OutEffect?.Duration ?? 0;
-                if (remainingTime >= 0 && remainingTime < outDur && outDur > 0 && activeItem.OutEffect != null)
-                {
-                    float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(remainingTime / outDur)));
-                    float invertProgress = 1.0f - progress;
-
-                    switch (activeItem.OutEffect.Type)
+                    // --- OUT ANIMATION ---
+                    double outDur = activeItem.OutEffect?.Duration ?? 0;
+                    if (remainingTime >= 0 && remainingTime < outDur && outDur > 0 && activeItem.OutEffect != null)
                     {
-                        case "Fade":
-                            opacity *= progress;
-                            break;
-                        case "Slide":
-                            x += (int)(canvasWidth * invertProgress);
-                            break;
-                        case "Wave":
-                            y += (int)(Math.Sin(invertProgress * Math.PI * 4) * 15);
-                            break;
-                        case "Zoom":
-                            zoomFactor *= (1.0f + 0.5f * invertProgress);
-                            break;
-                        case "ZoomBlur":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            break;
-                        case "ZoomBlurUp":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            y -= (int)(canvasHeight * invertProgress);
-                            break;
-                        case "ZoomBlurDown":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            y += (int)(canvasHeight * invertProgress);
-                            break;
-                        case "ZoomBlurLeft":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            x -= (int)(canvasWidth * invertProgress);
-                            break;
-                        case "ZoomBlurRight":
-                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                            x += (int)(canvasWidth * invertProgress);
-                            break;
+                        float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(remainingTime / outDur)));
+                        float invertProgress = 1.0f - progress;
+
+                        switch (activeItem.OutEffect.Type)
+                        {
+                            case "Fade":
+                                opacity *= progress;
+                                break;
+                            case "Slide":
+                                x += (int)(canvasWidth * invertProgress);
+                                break;
+                            case "Wave":
+                                y += (int)(Math.Sin(invertProgress * Math.PI * 4) * 15);
+                                break;
+                            case "Zoom":
+                                zoomFactor *= (1.0f + 0.5f * invertProgress);
+                                break;
+                            case "ZoomBlur":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                break;
+                            case "ZoomBlurUp":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                y -= (int)(canvasHeight * invertProgress);
+                                break;
+                            case "ZoomBlurDown":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                y += (int)(canvasHeight * invertProgress);
+                                break;
+                            case "ZoomBlurLeft":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                x -= (int)(canvasWidth * invertProgress);
+                                break;
+                            case "ZoomBlurRight":
+                                zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                                x += (int)(canvasWidth * invertProgress);
+                                break;
+                        }
                     }
-                }
 
-                if (zoomFactor != 1.0f)
-                {
-                    int newW = (int)(baseW * zoomFactor);
-                    int newH = (int)(baseH * zoomFactor);
-                    x += (baseW - newW) / 2;
-                    y += (baseH - newH) / 2;
-                    baseW = newW;
-                    baseH = newH;
-                }
-
-                if (zoomBlurIntensity > 0)
-                {
-                    int samples = 8;
-                    float maxScale = 1.0f + (zoomBlurIntensity * 0.7f);
-                    int centerX = x + (baseW / 2);
-                    int centerY = y + (baseH / 2);
-
-                    for (int i = 0; i < samples; i++)
+                    if (zoomFactor != 1.0f)
                     {
-                        float stepProgress = (float)i / (samples - 1);
-                        float currentScale = 1.0f + (maxScale - 1.0f) * stepProgress;
+                        int newW = (int)(baseW * zoomFactor);
+                        int newH = (int)(baseH * zoomFactor);
+                        x += (baseW - newW) / 2;
+                        y += (baseH - newH) / 2;
+                        baseW = newW;
+                        baseH = newH;
+                    }
 
-                        int stepW = (int)(baseW * currentScale);
-                        int stepH = (int)(baseH * currentScale);
-                        int stepX = centerX - (stepW / 2);
-                        int stepY = centerY - (stepH / 2);
+                    if (zoomBlurIntensity > 0)
+                    {
+                        int samples = 8;
+                        float maxScale = 1.0f + (zoomBlurIntensity * 0.7f);
+                        int centerX = x + (baseW / 2);
+                        int centerY = y + (baseH / 2);
 
+                        for (int i = 0; i < samples; i++)
+                        {
+                            float stepProgress = (float)i / (samples - 1);
+                            float currentScale = 1.0f + (maxScale - 1.0f) * stepProgress;
+
+                            int stepW = (int)(baseW * currentScale);
+                            int stepH = (int)(baseH * currentScale);
+                            int stepX = centerX - (stepW / 2);
+                            int stepY = centerY - (stepH / 2);
+
+                            using (var attributes = new ImageAttributes())
+                            {
+                                var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity / samples)) };
+                                attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+                                g.DrawImage(img, new Rectangle(stepX, stepY, stepW, stepH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
+                            }
+                        }
+                    }
+                    else if (opacity < 0.99f)
+                    {
                         using (var attributes = new ImageAttributes())
                         {
-                            var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity / samples)) };
+                            var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity)) };
                             attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
-                            g.DrawImage(img, new Rectangle(stepX, stepY, stepW, stepH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
+                            g.DrawImage(img, new Rectangle(x, y, baseW, baseH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
+                        }
+                    }
+                    else
+                    {
+                        g.DrawImage(img, x, y, baseW, baseH);
+                    }
+
+                    foreach (var label in activeItem.TextLabels)
+                    {
+                        using (var font = new Font(label.FontFamily, label.FontSize, label.IsBold ? FontStyle.Bold : FontStyle.Regular))
+                        using (var brush = new SolidBrush(label.Color))
+                        {
+                            g.DrawString(label.Content, font, brush, label.X, label.Y);
                         }
                     }
                 }
-                else if (opacity < 0.99f)
-                {
-                    using (var attributes = new ImageAttributes())
-                    {
-                        var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity)) };
-                        attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
-                        g.DrawImage(img, new Rectangle(x, y, baseW, baseH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
-                    }
-                }
-                else
-                {
-                    g.DrawImage(img, x, y, baseW, baseH);
-                }
-
-                foreach (var label in activeItem.TextLabels)
-                {
-                    using (var font = new Font(label.FontFamily, label.FontSize, label.IsBold ? FontStyle.Bold : FontStyle.Regular))
-                    using (var brush = new SolidBrush(label.Color))
-                    {
-                        g.DrawString(label.Content, font, brush, label.X, label.Y);
-                    }
-                }
-
-                g.ResetClip();
             }
+
+            g.ResetClip();
         }
 
         private void ImportFiles()
@@ -917,6 +940,55 @@ namespace VideoEditor
             btn.FlatAppearance.BorderSize = 0;
             btn.Click += (s, e) => onClick?.Invoke();
             return btn;
+        }
+    }
+
+    public class ProgressForm : Form
+    {
+        private ProgressBar progressBar;
+        private Label lblStatus;
+
+        public ProgressForm()
+        {
+            this.Size = new Size(400, 150);
+            this.Text = "Exporting Video";
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+            this.ControlBox = false;
+            this.BackColor = Color.FromArgb(35, 35, 35);
+
+            lblStatus = new Label
+            {
+                Text = "Rendering video...",
+                ForeColor = Color.White,
+                Location = new Point(20, 20),
+                AutoSize = true
+            };
+
+            progressBar = new ProgressBar
+            {
+                Location = new Point(20, 50),
+                Size = new Size(340, 25),
+                Minimum = 0,
+                Maximum = 100
+            };
+
+            this.Controls.Add(lblStatus);
+            this.Controls.Add(progressBar);
+        }
+
+        public void UpdateProgress(int value, string text)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke((MethodInvoker)delegate { UpdateProgress(value, text); });
+                return;
+            }
+
+            progressBar.Value = Math.Clamp(value, 0, 100);
+            lblStatus.Text = text;
         }
     }
 }
