@@ -1,14 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Windows.Forms;
+using System.Windows.Media; // Add reference to PresentationCore and WindowsBase
 using VideoEditor.Controls;
 using VideoEditor.Models;
+using Color = System.Drawing.Color;
 using VideoEditor.Services;
 using Timer = System.Windows.Forms.Timer;
 
@@ -16,12 +17,6 @@ namespace VideoEditor
 {
     public partial class MainForm : Form
     {
-        [DllImport("winmm.dll", CharSet = CharSet.Auto)]
-        private static extern int mciSendString(string command, StringBuilder buffer, int bufferSize, IntPtr hwndCallback);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern uint GetShortPathName(string lpszLongPath, StringBuilder lpszShortPath, uint cchBuffer);
-
         private List<MediaItem> mediaItems = new List<MediaItem>();
         private PreviewControl previewControl;
         private TimelineControl timelineControl;
@@ -30,9 +25,14 @@ namespace VideoEditor
         private ListBox mediaListBox;
 
         private Timer playbackTimer;
+        private Stopwatch playbackStopwatch = new Stopwatch();
+        private double playbackStartOffset = 0;
         private bool isPlaying = false;
         private bool isUserScrubbing = false;
         private Button btnPlayPause;
+
+        // Native WPF MediaPlayer engine (Handles MP3/WAV/M4A mid-stream seeking accurately)
+        private MediaPlayer audioPlayer = new MediaPlayer();
         private string currentAudioPath = null;
 
         private Timer scrubAudioTimer;
@@ -58,20 +58,13 @@ namespace VideoEditor
 
         private void InitializePlaybackEngine()
         {
-            playbackTimer = new Timer { Interval = 33 };
+            playbackTimer = new Timer { Interval = 15 };
             playbackTimer.Tick += (s, e) =>
             {
-                timelineControl.CurrentTime += 0.033;
+                if (!isPlaying) return;
 
-                var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
-                if (audioItem != null)
-                {
-                    double time = timelineControl.CurrentTime;
-                    if (time < audioItem.StartTime || time >= (audioItem.StartTime + audioItem.Duration))
-                    {
-                        mciSendString("pause audioTrack", null, 0, IntPtr.Zero);
-                    }
-                }
+                double elapsedSecs = playbackStopwatch.Elapsed.TotalSeconds;
+                timelineControl.CurrentTime = playbackStartOffset + elapsedSecs;
 
                 if (timelineControl.CurrentTime >= timelineControl.GetTotalDuration())
                 {
@@ -80,7 +73,7 @@ namespace VideoEditor
                 }
             };
 
-            scrubAudioTimer = new Timer { Interval = 60 };
+            scrubAudioTimer = new Timer { Interval = 30 };
             scrubAudioTimer.Tick += (s, e) =>
             {
                 scrubAudioTimer.Stop();
@@ -90,6 +83,78 @@ namespace VideoEditor
                     pendingScrubTime = -1;
                 }
             };
+        }
+
+        private void EnsureAudioLoaded(string filePath)
+        {
+            if (currentAudioPath != filePath)
+            {
+                audioPlayer.Close();
+                audioPlayer.Open(new Uri(filePath, UriKind.Absolute));
+                currentAudioPath = filePath;
+            }
+        }
+
+        private void ApplyAudioSeek(double timePosition)
+        {
+            var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
+            if (audioItem != null && File.Exists(audioItem.FilePath))
+            {
+                EnsureAudioLoaded(audioItem.FilePath);
+
+                if (timePosition >= audioItem.StartTime && timePosition < (audioItem.StartTime + audioItem.Duration))
+                {
+                    double relativeSecs = timePosition - audioItem.StartTime;
+                    audioPlayer.Position = TimeSpan.FromSeconds(relativeSecs);
+
+                    if (isPlaying)
+                    {
+                        audioPlayer.Play();
+                    }
+                }
+                else
+                {
+                    audioPlayer.Pause();
+                }
+            }
+        }
+
+        private void StartPlayback()
+        {
+            playbackStartOffset = timelineControl.CurrentTime;
+            playbackStopwatch.Restart();
+
+            var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
+            if (audioItem != null && File.Exists(audioItem.FilePath))
+            {
+                double currentTime = timelineControl.CurrentTime;
+                if (currentTime >= audioItem.StartTime && currentTime < (audioItem.StartTime + audioItem.Duration))
+                {
+                    EnsureAudioLoaded(audioItem.FilePath);
+
+                    double relativeSecs = currentTime - audioItem.StartTime;
+                    audioPlayer.Position = TimeSpan.FromSeconds(relativeSecs);
+                    audioPlayer.Play();
+                }
+            }
+
+            isPlaying = true;
+            btnPlayPause.Text = "⏸ Pause";
+            playbackTimer.Start();
+        }
+
+        private void PausePlayback()
+        {
+            playbackStopwatch.Stop();
+            try
+            {
+                audioPlayer.Pause();
+            }
+            catch { }
+
+            isPlaying = false;
+            btnPlayPause.Text = "▶ Play";
+            playbackTimer.Stop();
         }
 
         private void InitializeUI()
@@ -133,7 +198,7 @@ namespace VideoEditor
             {
                 previewControl.RenderFrame(mediaItems, time);
 
-                if (!isPlaying || isUserScrubbing)
+                if (isUserScrubbing || !isPlaying)
                 {
                     pendingScrubTime = time;
                     scrubAudioTimer.Stop();
@@ -151,11 +216,17 @@ namespace VideoEditor
                 TimelineControl_ItemResized(timelineControl, resizedItem);
             };
 
-            timelineControl.MouseDown += (s, e) => { isUserScrubbing = true; };
+            timelineControl.MouseDown += (s, e) =>
+            {
+                isUserScrubbing = true;
+                if (isPlaying) PausePlayback();
+            };
+
             timelineControl.MouseUp += (s, e) =>
             {
                 isUserScrubbing = false;
-                if (isPlaying) StartPlayback();
+                scrubAudioTimer.Stop();
+                ApplyAudioSeek(timelineControl.CurrentTime);
             };
 
             mainLayout.Controls.Add(timelineControl, 0, 2);
@@ -221,7 +292,6 @@ namespace VideoEditor
             return panel;
         }
 
-
         private void UpdateSplitEffectDurations(MediaItem item)
         {
             if (item == null || item.Type != MediaType.Image) return;
@@ -250,7 +320,6 @@ namespace VideoEditor
                 RefreshTimeline();
             }
         }
-
 
         private void SaveAnimationSettings()
         {
@@ -328,22 +397,20 @@ namespace VideoEditor
             return cb;
         }
 
-        // 1. Lower the minimum allowed value for NumericUpDown controls
         private NumericUpDown CreateNumberInput()
         {
             return new NumericUpDown
             {
                 Width = 220,
-                Minimum = 0.0m, // Changed from 0.5m to 0.0m to handle small effect splits safely
+                Minimum = 0.0m,
                 Maximum = 60.0m,
-                DecimalPlaces = 2, // Upgraded to 2 decimal places for smoother edge dragging
+                DecimalPlaces = 2,
                 Increment = 0.1m,
                 BackColor = Color.FromArgb(55, 55, 55),
                 ForeColor = Color.White
             };
         }
 
-        // 2. Safe assignment with value clamping in TimelineControl_ItemResized
         private void TimelineControl_ItemResized(object sender, MediaItem item)
         {
             if (item != null && item.Type == MediaType.Image)
@@ -354,7 +421,6 @@ namespace VideoEditor
                 {
                     isBindingUI = true;
 
-                    // Use Math.Clamp to guarantee values never fall outside control limits
                     numDuration.Value = (decimal)Math.Clamp(item.Duration, (double)numDuration.Minimum, (double)numDuration.Maximum);
 
                     if (item.InEffect != null)
@@ -370,7 +436,6 @@ namespace VideoEditor
             }
         }
 
-        // 3. Apply the same safe assignment to BindSelectedMediaToUI
         private void BindSelectedMediaToUI(MediaItem item)
         {
             if (item == null || item.Type != MediaType.Image) return;
@@ -391,6 +456,7 @@ namespace VideoEditor
 
             isBindingUI = false;
         }
+
         private Button CreateActionButton(string text, Action onClick)
         {
             var btn = new Button
@@ -477,52 +543,6 @@ namespace VideoEditor
             previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
         }
 
-        private string GetShortPath(string path)
-        {
-            var shortPath = new StringBuilder(255);
-            uint result = GetShortPathName(path, shortPath, (uint)shortPath.Capacity);
-            return result != 0 ? shortPath.ToString() : path;
-        }
-
-        private void EnsureAudioLoaded(string filePath)
-        {
-            if (currentAudioPath != filePath)
-            {
-                mciSendString("close audioTrack", null, 0, IntPtr.Zero);
-                string safePath = GetShortPath(filePath);
-                mciSendString($"open \"{safePath}\" alias audioTrack", null, 0, IntPtr.Zero);
-                mciSendString("set audioTrack time format ms", null, 0, IntPtr.Zero);
-                currentAudioPath = filePath;
-            }
-        }
-
-        private void ApplyAudioSeek(double timePosition)
-        {
-            var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
-            if (audioItem != null && File.Exists(audioItem.FilePath))
-            {
-                EnsureAudioLoaded(audioItem.FilePath);
-
-                if (timePosition >= audioItem.StartTime && timePosition < (audioItem.StartTime + audioItem.Duration))
-                {
-                    int millis = (int)((timePosition - audioItem.StartTime) * 1000);
-
-                    if (isPlaying)
-                    {
-                        mciSendString($"play audioTrack from {millis}", null, 0, IntPtr.Zero);
-                    }
-                    else
-                    {
-                        mciSendString($"seek audioTrack to {millis}", null, 0, IntPtr.Zero);
-                    }
-                }
-                else
-                {
-                    mciSendString("pause audioTrack", null, 0, IntPtr.Zero);
-                }
-            }
-        }
-
         private Control CreateToolbar()
         {
             var toolbar = new FlowLayoutPanel
@@ -539,7 +559,6 @@ namespace VideoEditor
 
             toolbar.Controls.Add(CreateStyledButton("🗑 Delete Selected", () => DeleteSelectedMedia()));
 
-            // Update inside CreateToolbar() in MainForm.cs
             toolbar.Controls.Add(CreateStyledButton("Export Video", async () =>
             {
                 PausePlayback();
@@ -552,10 +571,8 @@ namespace VideoEditor
 
                         try
                         {
-                            // Pass RenderPreviewAtTime delegate directly into export service
                             await exportService.ExportToVideo(mediaItems, sfd.FileName, (time, g) =>
                             {
-                                // Call the exact same method that paints your live preview control
                                 RenderPreviewAtTime(time, g, new Size(1080, 1920));
                             });
 
@@ -584,11 +601,11 @@ namespace VideoEditor
             }));
             return toolbar;
         }
+
         public void RenderPreviewAtTime(double timePosition, Graphics g, Size canvasSize)
         {
             g.Clear(Color.Black);
 
-            // Find active image item using exact timeline StartTime positioning
             var activeItem = mediaItems.FirstOrDefault(item =>
                 item.Type == MediaType.Image &&
                 timePosition >= item.StartTime &&
@@ -599,7 +616,6 @@ namespace VideoEditor
 
             using (var img = Image.FromFile(activeItem.FilePath))
             {
-                // 1. Calculate 9:16 aspect ratio box based on target canvas size
                 float targetAspect = 9.0f / 16.0f;
                 int canvasWidth = canvasSize.Width;
                 int canvasHeight = canvasSize.Height;
@@ -616,7 +632,6 @@ namespace VideoEditor
                 int canvasX = (canvasSize.Width - canvasWidth) / 2;
                 int canvasY = (canvasSize.Height - canvasHeight) / 2;
 
-                // Fill 9:16 area maintaining image aspect ratio
                 float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height);
                 int baseW = (int)(img.Width * scale);
                 int baseH = (int)(img.Height * scale);
@@ -626,7 +641,6 @@ namespace VideoEditor
                 int x = originX;
                 int y = originY;
 
-                // Clip strictly to destination canvas box
                 g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
 
                 double localTime = timePosition - activeItem.StartTime;
@@ -722,7 +736,6 @@ namespace VideoEditor
                     }
                 }
 
-                // Apply Zoom Scaling
                 if (zoomFactor != 1.0f)
                 {
                     int newW = (int)(baseW * zoomFactor);
@@ -733,7 +746,6 @@ namespace VideoEditor
                     baseH = newH;
                 }
 
-                // Render Base Image / Motion Effects
                 if (zoomBlurIntensity > 0)
                 {
                     int samples = 8;
@@ -773,7 +785,6 @@ namespace VideoEditor
                     g.DrawImage(img, x, y, baseW, baseH);
                 }
 
-                // Render Text Overlays / Captions
                 foreach (var label in activeItem.TextLabels)
                 {
                     using (var font = new Font(label.FontFamily, label.FontSize, label.IsBold ? FontStyle.Bold : FontStyle.Regular))
@@ -786,6 +797,7 @@ namespace VideoEditor
                 g.ResetClip();
             }
         }
+
         private void ImportFiles()
         {
             using (var ofd = new OpenFileDialog
@@ -819,34 +831,6 @@ namespace VideoEditor
             else StartPlayback();
         }
 
-        private void StartPlayback()
-        {
-            var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
-            if (audioItem != null && File.Exists(audioItem.FilePath))
-            {
-                double currentTime = timelineControl.CurrentTime;
-                if (currentTime >= audioItem.StartTime && currentTime < (audioItem.StartTime + audioItem.Duration))
-                {
-                    EnsureAudioLoaded(audioItem.FilePath);
-                    int millis = (int)((currentTime - audioItem.StartTime) * 1000);
-
-                    mciSendString($"play audioTrack from {millis}", null, 0, IntPtr.Zero);
-                }
-            }
-
-            isPlaying = true;
-            btnPlayPause.Text = "⏸ Pause";
-            playbackTimer.Start();
-        }
-
-        private void PausePlayback()
-        {
-            try { mciSendString("pause audioTrack", null, 0, IntPtr.Zero); } catch { }
-            isPlaying = false;
-            btnPlayPause.Text = "▶ Play";
-            playbackTimer.Stop();
-        }
-
         private Control CreateMediaPanel()
         {
             var panel = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(35, 35, 35) };
@@ -857,10 +841,9 @@ namespace VideoEditor
 
         private double GetAudioDuration(string filePath)
         {
-            // 1. Primary Method: Query exact duration via FFmpeg
             try
             {
-                var psi = new System.Diagnostics.ProcessStartInfo
+                var psi = new ProcessStartInfo
                 {
                     FileName = "ffmpeg.exe",
                     Arguments = $"-i \"{filePath}\"",
@@ -869,13 +852,11 @@ namespace VideoEditor
                     CreateNoWindow = true
                 };
 
-                using (var process = System.Diagnostics.Process.Start(psi))
+                using (var process = Process.Start(psi))
                 {
-                    // FFmpeg outputs media stream info to StandardError
                     string output = process.StandardError.ReadToEnd();
                     process.WaitForExit();
 
-                    // Look for "Duration: HH:MM:SS.ff" pattern in output
                     var match = System.Text.RegularExpressions.Regex.Match(output, @"Duration:\s*(\d+):(\d+):(\d+\.\d+)");
                     if (match.Success)
                     {
@@ -890,24 +871,6 @@ namespace VideoEditor
             }
             catch { }
 
-            // 2. Fallback: Quick WAV byte-rate calculation
-            try
-            {
-                if (filePath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
-                {
-                    var fileInfo = new FileInfo(filePath);
-                    using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
-                    using (var br = new BinaryReader(fs))
-                    {
-                        fs.Seek(28, SeekOrigin.Begin);
-                        int byteRate = br.ReadInt32();
-                        if (byteRate > 0) return (double)fileInfo.Length / byteRate;
-                    }
-                }
-            }
-            catch { }
-
-            // 3. Safety Fallback: Default to 120s if all probes fail
             return 120.0;
         }
 
