@@ -364,6 +364,8 @@ namespace VideoEditor
                 FilePath = filePath,
                 Type = type,
                 Duration = duration,
+                OriginalDuration = duration, // <--- Add this line
+                SourceOffset = 0,             // <--- Add this line
                 StartTime = nextStartTime,
                 InEffect = new TransitionEffect { Type = "ZoomBlurUp", Duration = halfDuration },
                 OutEffect = new TransitionEffect { Type = "ZoomBlurDown", Duration = halfDuration }
@@ -517,9 +519,14 @@ namespace VideoEditor
             if (item != null && playhead > item.StartTime && playhead < (item.StartTime + item.Duration))
             {
                 double cutAmount = playhead - item.StartTime;
+
+                // Maintain original untrimmed duration reference
+                if (item.OriginalDuration <= 0) item.OriginalDuration = item.Duration;
+
+                item.SourceOffset += cutAmount; // Shift waveform rendering window
                 item.StartTime = playhead;
                 item.Duration -= cutAmount;
-                UpdateSplitEffectDurations(item);
+
                 RefreshTimeline();
             }
         }
@@ -531,12 +538,13 @@ namespace VideoEditor
 
             if (item != null && playhead > item.StartTime && playhead < (item.StartTime + item.Duration))
             {
+                if (item.OriginalDuration <= 0) item.OriginalDuration = item.Duration;
+
                 item.Duration = playhead - item.StartTime;
-                UpdateSplitEffectDurations(item);
+
                 RefreshTimeline();
             }
         }
-
         private void RefreshTimeline()
         {
             timelineControl.Invalidate();

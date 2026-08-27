@@ -95,7 +95,7 @@ namespace VideoEditor.Controls
                 // --- AUDIO WAVEFORM / BAR GRAPH RENDER ---
                 if (item.Type == MediaType.Audio)
                 {
-                    DrawAudioWaveform(g, item, rect);
+                    DrawAudioClip(g, item, rect);
                 }
 
                 g.DrawRectangle(item == SelectedItem ? new Pen(Color.Yellow, 2) : Pens.White, rect);
@@ -112,8 +112,31 @@ namespace VideoEditor.Controls
             g.DrawLine(new Pen(Color.Red, 2), playheadX, 0, playheadX, this.Height);
         }
 
-        private void DrawAudioWaveform(Graphics g, MediaItem item, Rectangle clipRect)
+        private void DrawAudioClip(Graphics g, MediaItem item, Rectangle clipBounds)
         {
+            // 1. Restrict drawing area so anything outside the trimmed clip is clipped out
+            g.SetClip(clipBounds);
+
+            // 2. Use the timeline scale (pixelsPerSecond) so 1 second always equals the same pixel width
+            double originalDuration = item.OriginalDuration > 0 ? item.OriginalDuration : item.Duration;
+            int fullUnclippedWidth = (int)(originalDuration * pixelsPerSecond);
+
+            // 3. Shift the target drawing box left by the trim offset (SourceOffset)
+            int renderX = clipBounds.X - (int)(item.SourceOffset * pixelsPerSecond);
+
+            Rectangle fullWaveformBounds = new Rectangle(renderX, clipBounds.Y, fullUnclippedWidth, clipBounds.Height);
+
+            // 4. Render the UNSTRETCHED waveform
+            DrawWaveformPeaks(g, item, fullWaveformBounds);
+
+            // Reset clip region
+            g.ResetClip();
+        }
+
+        private void DrawWaveformPeaks(Graphics g, MediaItem item, Rectangle bounds)
+        {
+            if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
             if (!waveformCache.ContainsKey(item.FilePath))
             {
                 waveformCache[item.FilePath] = GenerateAudioPeaks(item.FilePath);
@@ -122,30 +145,30 @@ namespace VideoEditor.Controls
             float[] peaks = waveformCache[item.FilePath];
             if (peaks == null || peaks.Length == 0) return;
 
-            int barWidth = 2; // Width of each sound bar
-            int gap = 1;      // Gap between sound bars
+            int centerY = bounds.Y + (bounds.Height / 2);
+            int maxWaveHeight = (bounds.Height / 2) - 4;
+
+            int barWidth = 2;
+            int gap = 1;
             int totalBarSpace = barWidth + gap;
-            int numBarsToDraw = clipRect.Width / totalBarSpace;
 
-            int centerY = clipRect.Y + (clipRect.Height / 2);
-            int maxBarHeight = (clipRect.Height / 2) - 4;
-
-            using (var wavePen = new Pen(Color.FromArgb(200, 255, 255, 255), barWidth))
+            using (Pen wavePen = new Pen(Color.FromArgb(200, 255, 255, 255), barWidth))
+            using (Pen centerLinePen = new Pen(Color.FromArgb(100, 255, 255, 255), 1f))
             {
-                for (int i = 0; i < numBarsToDraw; i++)
-                {
-                    int barX = clipRect.X + (i * totalBarSpace);
-                    if (barX >= clipRect.Right) break;
+                g.DrawLine(centerLinePen, bounds.Left, centerY, bounds.Right, centerY);
 
-                    // Map clip width position to audio amplitude sample array
-                    float progress = (float)i / numBarsToDraw;
+                // Step through screen coordinates across the full unclipped width
+                for (int x = bounds.Left; x < bounds.Right; x += totalBarSpace)
+                {
+                    // Map physical screen position back to full audio progress
+                    float progress = (float)(x - bounds.Left) / bounds.Width;
                     int peakIndex = (int)(progress * peaks.Length);
                     peakIndex = Math.Clamp(peakIndex, 0, peaks.Length - 1);
 
-                    int height = (int)(peaks[peakIndex] * maxBarHeight);
-                    height = Math.Max(height, 2); // Minimum visible bar indicator
+                    int height = (int)(peaks[peakIndex] * maxWaveHeight);
+                    height = Math.Max(height, 2);
 
-                    g.DrawLine(wavePen, barX, centerY - height, barX, centerY + height);
+                    g.DrawLine(wavePen, x, centerY - height, x, centerY + height);
                 }
             }
         }
@@ -157,27 +180,51 @@ namespace VideoEditor.Controls
                 if (!File.Exists(filePath)) return new float[0];
 
                 byte[] fileBytes = File.ReadAllBytes(filePath);
-                int sampleCount = 200; // Number of bars to represent the audio track
-                float[] peaks = new float[sampleCount];
-                int step = Math.Max(1, fileBytes.Length / sampleCount);
 
-                for (int i = 0; i < sampleCount; i++)
+                // Standard WAV headers are at least 44 bytes long
+                int headerOffset = 44;
+                if (fileBytes.Length <= headerOffset) return new float[0];
+
+                // Parse channels and bit depth from header if available
+                int channels = BitConverter.ToUInt16(fileBytes, 22);
+                int bitsPerSample = BitConverter.ToUInt16(fileBytes, 34);
+
+                if (channels == 0) channels = 2; // Default fallback to stereo
+                if (bitsPerSample == 0) bitsPerSample = 16;
+
+                int bytesPerSample = bitsPerSample / 8;
+                int totalAudioBytes = fileBytes.Length - headerOffset;
+                int totalSamples = totalAudioBytes / (bytesPerSample * channels);
+
+                int targetBarCount = 400; // Number of bars to display across timeline
+                float[] peaks = new float[targetBarCount];
+                int samplesPerBar = Math.Max(1, totalSamples / targetBarCount);
+
+                for (int i = 0; i < targetBarCount; i++)
                 {
-                    int start = i * step;
-                    int end = Math.Min(start + step, fileBytes.Length);
-                    float max = 0;
+                    float maxAmplitude = 0f;
+                    int startSample = i * samplesPerBar;
+                    int endSample = Math.Min(startSample + samplesPerBar, totalSamples);
 
-                    for (int j = start; j < end; j += 2)
+                    for (int s = startSample; s < endSample; s++)
                     {
-                        if (j + 1 < fileBytes.Length)
+                        int byteIndex = headerOffset + (s * channels * bytesPerSample);
+                        if (byteIndex + 1 >= fileBytes.Length) break;
+
+                        // Read 16-bit PCM Audio Sample
+                        short sampleValue = (short)(fileBytes[byteIndex] | (fileBytes[byteIndex + 1] << 8));
+                        float absValue = Math.Abs(sampleValue / 32768f);
+
+                        if (absValue > maxAmplitude)
                         {
-                            short sample = (short)(fileBytes[j] | (fileBytes[j + 1] << 8));
-                            float abs = Math.Abs(sample / 32768f);
-                            if (abs > max) max = abs;
+                            maxAmplitude = absValue;
                         }
                     }
-                    peaks[i] = Math.Min(max * 2.5f, 1.0f); // Normalize & amplify visual contrast
+
+                    // Noise gate: remove background jitter/silence artifacts
+                    peaks[i] = maxAmplitude < 0.02f ? 0f : Math.Min(maxAmplitude * 1.5f, 1.0f);
                 }
+
                 return peaks;
             }
             catch
@@ -185,7 +232,11 @@ namespace VideoEditor.Controls
                 return new float[0];
             }
         }
-
+        public void ClearWaveformCache()
+        {
+            waveformCache.Clear();
+            this.Invalidate();
+        }
         private void Timeline_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Y <= headerHeight)

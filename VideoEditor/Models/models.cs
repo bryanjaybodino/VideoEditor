@@ -26,6 +26,9 @@ namespace VideoEditor.Models
         public double Duration { get; set; } = 3.0; // Duration in seconds
         public double StartTime { get; set; } = 0.0; // Timeline offset in seconds
         public int TrackIndex { get; set; } = 0;     // 0 = Image Track, 1 = Audio Track
+                                    
+        public double OriginalDuration { get; set; } = 0;
+        public double SourceOffset { get; set; } = 0;
 
         // In (Entrance) and Out (Exit) animations
         public TransitionEffect InEffect { get; set; } = new TransitionEffect { Type = "Fade", Duration = 0.5 };
