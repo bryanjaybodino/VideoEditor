@@ -105,7 +105,6 @@ namespace VideoEditor
                 RowCount = 3
             };
 
-            // Mobile-Optimized Grid Dimensions (20% Left, 55% Center Canvas, 25% Right Controls)
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
@@ -141,13 +140,11 @@ namespace VideoEditor
                 }
             };
 
-            // Sync Timeline item click event with Sidebar Controls
             timelineControl.ClipSelected += (selectedItem) =>
             {
                 BindSelectedMediaToUI(selectedItem);
             };
 
-            // Hook up live drag-resizing event from TimelineControl
             timelineControl.ItemResized += (resizedItem) =>
             {
                 TimelineControl_ItemResized(timelineControl, resizedItem);
@@ -187,14 +184,12 @@ namespace VideoEditor
                 Margin = new Padding(0, 0, 0, 10)
             });
 
-            // Split Controls
             panel.Controls.Add(CreateActionButton("✂ Split Clip", () => SplitSelectedClip()));
             panel.Controls.Add(CreateActionButton("✂◄ Split Left (Trim Left)", () => SplitLeftSelectedClip()));
             panel.Controls.Add(CreateActionButton("►✂ Split Right (Trim Right)", () => SplitRightSelectedClip()));
 
             panel.Controls.Add(new Label { Height = 1, Width = 220, BackColor = Color.Gray, Margin = new Padding(0, 10, 0, 10) });
 
-            // Total Image Duration
             panel.Controls.Add(CreateSectionHeader("Total Clip Duration (s)"));
             numDuration = CreateNumberInput();
             numDuration.ValueChanged += NumDuration_ValueChanged;
@@ -202,7 +197,6 @@ namespace VideoEditor
 
             panel.Controls.Add(new Label { Height = 1, Width = 220, BackColor = Color.Gray, Margin = new Padding(0, 10, 0, 10) });
 
-            // IN (Entrance) Animation
             panel.Controls.Add(CreateSectionHeader("In Animation (Entrance)"));
             cbInEffect = CreateEffectDropdown();
             cbInEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
@@ -210,10 +204,9 @@ namespace VideoEditor
 
             panel.Controls.Add(CreateSubLabel("In Duration (s):"));
             numInDuration = CreateNumberInput();
-            numInDuration.ReadOnly = true; // Auto-calculated (50% Split)
+            numInDuration.ReadOnly = true;
             panel.Controls.Add(numInDuration);
 
-            // OUT (Exit) Animation
             panel.Controls.Add(CreateSectionHeader("Out Animation (Exit)"));
             cbOutEffect = CreateEffectDropdown();
             cbOutEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
@@ -221,53 +214,23 @@ namespace VideoEditor
 
             panel.Controls.Add(CreateSubLabel("Out Duration (s):"));
             numOutDuration = CreateNumberInput();
-            numOutDuration.ReadOnly = true; // Auto-calculated (50% Split)
+            numOutDuration.ReadOnly = true;
             panel.Controls.Add(numOutDuration);
 
             return panel;
         }
 
-        private void BindSelectedMediaToUI(MediaItem item)
-        {
-            if (item == null || item.Type != MediaType.Image) return;
 
-            isBindingUI = true;
-
-            // Load clip duration
-            numDuration.Value = (decimal)item.Duration;
-
-            // Set drop-downs
-            cbInEffect.SelectedItem = item.InEffect?.Type ?? "None";
-            cbOutEffect.SelectedItem = item.OutEffect?.Type ?? "None";
-
-            // Re-calculate 50/50 split on selection
-            UpdateSplitEffectDurations(item);
-
-            numInDuration.Value = (decimal)(item.InEffect?.Duration ?? 0);
-            numOutDuration.Value = (decimal)(item.OutEffect?.Duration ?? 0);
-
-            isBindingUI = false;
-        }
-
-        // Helper method: Splits image duration 50/50 and assigns it to In and Out effects
         private void UpdateSplitEffectDurations(MediaItem item)
         {
             if (item == null || item.Type != MediaType.Image) return;
 
             double halfDuration = Math.Round(item.Duration / 2.0, 2);
 
-            if (item.InEffect != null)
-            {
-                item.InEffect.Duration = halfDuration;
-            }
-
-            if (item.OutEffect != null)
-            {
-                item.OutEffect.Duration = halfDuration;
-            }
+            if (item.InEffect != null) item.InEffect.Duration = halfDuration;
+            if (item.OutEffect != null) item.OutEffect.Duration = halfDuration;
         }
 
-        // Triggered when editing the numerical input
         private void NumDuration_ValueChanged(object sender, EventArgs e)
         {
             if (isBindingUI) return;
@@ -276,7 +239,6 @@ namespace VideoEditor
             if (item != null && item.Type == MediaType.Image)
             {
                 item.Duration = (double)numDuration.Value;
-
                 UpdateSplitEffectDurations(item);
 
                 isBindingUI = true;
@@ -288,25 +250,6 @@ namespace VideoEditor
             }
         }
 
-        // Triggered dynamically during timeline clip edge dragging
-        private void TimelineControl_ItemResized(object sender, MediaItem item)
-        {
-            if (item != null && item.Type == MediaType.Image)
-            {
-                UpdateSplitEffectDurations(item);
-
-                if (timelineControl.SelectedItem == item)
-                {
-                    isBindingUI = true;
-                    numDuration.Value = (decimal)item.Duration;
-                    numInDuration.Value = (decimal)item.InEffect.Duration;
-                    numOutDuration.Value = (decimal)item.OutEffect.Duration;
-                    isBindingUI = false;
-                }
-
-                RefreshTimeline();
-            }
-        }
 
         private void SaveAnimationSettings()
         {
@@ -376,27 +319,77 @@ namespace VideoEditor
             };
 
             cb.Items.AddRange(new object[] {
-                "None",
-                "Fade",
-                "Slide",
-                "Wave",
-                "Zoom",
-                "ZoomBlur",
-                "ZoomBlurUp",
-                "ZoomBlurDown",
-                "ZoomBlurLeft",
-                "ZoomBlurRight"
+                "None", "Fade", "Slide", "Wave", "Zoom", "ZoomBlur",
+                "ZoomBlurUp", "ZoomBlurDown", "ZoomBlurLeft", "ZoomBlurRight"
             });
 
             cb.SelectedIndex = 0;
             return cb;
         }
 
+        // 1. Lower the minimum allowed value for NumericUpDown controls
         private NumericUpDown CreateNumberInput()
         {
-            return new NumericUpDown { Width = 220, Minimum = 0.5m, Maximum = 60.0m, DecimalPlaces = 1, Increment = 0.5m, BackColor = Color.FromArgb(55, 55, 55), ForeColor = Color.White };
+            return new NumericUpDown
+            {
+                Width = 220,
+                Minimum = 0.0m, // Changed from 0.5m to 0.0m to handle small effect splits safely
+                Maximum = 60.0m,
+                DecimalPlaces = 2, // Upgraded to 2 decimal places for smoother edge dragging
+                Increment = 0.1m,
+                BackColor = Color.FromArgb(55, 55, 55),
+                ForeColor = Color.White
+            };
         }
 
+        // 2. Safe assignment with value clamping in TimelineControl_ItemResized
+        private void TimelineControl_ItemResized(object sender, MediaItem item)
+        {
+            if (item != null && item.Type == MediaType.Image)
+            {
+                UpdateSplitEffectDurations(item);
+
+                if (timelineControl.SelectedItem == item)
+                {
+                    isBindingUI = true;
+
+                    // Use Math.Clamp to guarantee values never fall outside control limits
+                    numDuration.Value = (decimal)Math.Clamp(item.Duration, (double)numDuration.Minimum, (double)numDuration.Maximum);
+
+                    if (item.InEffect != null)
+                        numInDuration.Value = (decimal)Math.Clamp(item.InEffect.Duration, (double)numInDuration.Minimum, (double)numInDuration.Maximum);
+
+                    if (item.OutEffect != null)
+                        numOutDuration.Value = (decimal)Math.Clamp(item.OutEffect.Duration, (double)numOutDuration.Minimum, (double)numOutDuration.Maximum);
+
+                    isBindingUI = false;
+                }
+
+                RefreshTimeline();
+            }
+        }
+
+        // 3. Apply the same safe assignment to BindSelectedMediaToUI
+        private void BindSelectedMediaToUI(MediaItem item)
+        {
+            if (item == null || item.Type != MediaType.Image) return;
+
+            isBindingUI = true;
+
+            numDuration.Value = (decimal)Math.Clamp(item.Duration, (double)numDuration.Minimum, (double)numDuration.Maximum);
+            cbInEffect.SelectedItem = item.InEffect?.Type ?? "None";
+            cbOutEffect.SelectedItem = item.OutEffect?.Type ?? "None";
+
+            UpdateSplitEffectDurations(item);
+
+            double inDur = item.InEffect?.Duration ?? 0;
+            double outDur = item.OutEffect?.Duration ?? 0;
+
+            numInDuration.Value = (decimal)Math.Clamp(inDur, (double)numInDuration.Minimum, (double)numInDuration.Maximum);
+            numOutDuration.Value = (decimal)Math.Clamp(outDur, (double)numOutDuration.Minimum, (double)numOutDuration.Maximum);
+
+            isBindingUI = false;
+        }
         private Button CreateActionButton(string text, Action onClick)
         {
             var btn = new Button
@@ -641,25 +634,58 @@ namespace VideoEditor
 
         private double GetAudioDuration(string filePath)
         {
+            // 1. Primary Method: Query exact duration via FFmpeg
             try
             {
-                string safePath = GetShortPath(filePath);
-                StringBuilder lengthBuf = new StringBuilder(128);
-
-                mciSendString("close tempAudio", null, 0, IntPtr.Zero);
-                mciSendString($"open \"{safePath}\" alias tempAudio", null, 0, IntPtr.Zero);
-                mciSendString("set tempAudio time format ms", null, 0, IntPtr.Zero);
-                mciSendString("status tempAudio length", lengthBuf, lengthBuf.Capacity, IntPtr.Zero);
-                mciSendString("close tempAudio", null, 0, IntPtr.Zero);
-
-                if (long.TryParse(lengthBuf.ToString().Trim(), out long lengthInMs) && lengthInMs > 0)
+                var psi = new System.Diagnostics.ProcessStartInfo
                 {
-                    return lengthInMs / 1000.0;
+                    FileName = "ffmpeg.exe",
+                    Arguments = $"-i \"{filePath}\"",
+                    UseShellExecute = false,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+
+                using (var process = System.Diagnostics.Process.Start(psi))
+                {
+                    // FFmpeg outputs media stream info to StandardError
+                    string output = process.StandardError.ReadToEnd();
+                    process.WaitForExit();
+
+                    // Look for "Duration: HH:MM:SS.ff" pattern in output
+                    var match = System.Text.RegularExpressions.Regex.Match(output, @"Duration:\s*(\d+):(\d+):(\d+\.\d+)");
+                    if (match.Success)
+                    {
+                        int hours = int.Parse(match.Groups[1].Value);
+                        int minutes = int.Parse(match.Groups[2].Value);
+                        double seconds = double.Parse(match.Groups[3].Value, System.Globalization.CultureInfo.InvariantCulture);
+
+                        double totalSeconds = (hours * 3600) + (minutes * 60) + seconds;
+                        if (totalSeconds > 0) return totalSeconds;
+                    }
                 }
             }
             catch { }
 
-            return 60.0;
+            // 2. Fallback: Quick WAV byte-rate calculation
+            try
+            {
+                if (filePath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+                {
+                    var fileInfo = new FileInfo(filePath);
+                    using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+                    using (var br = new BinaryReader(fs))
+                    {
+                        fs.Seek(28, SeekOrigin.Begin);
+                        int byteRate = br.ReadInt32();
+                        if (byteRate > 0) return (double)fileInfo.Length / byteRate;
+                    }
+                }
+            }
+            catch { }
+
+            // 3. Safety Fallback: Default to 120s if all probes fail
+            return 120.0;
         }
 
         private void DeleteSelectedMedia()

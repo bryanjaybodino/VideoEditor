@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using VideoEditor.Models;
@@ -21,11 +22,14 @@ namespace VideoEditor.Controls
 
         private MediaItem activeClip = null;
         private double clipDragOffset = 0;
-        private const int EdgeMargin = 8; // Hotspot width in pixels for edge resizing
+        private const int EdgeMargin = 8;
+
+        // Cache waveforms per audio file path to avoid re-calculating on every frame paint
+        private Dictionary<string, float[]> waveformCache = new Dictionary<string, float[]>();
 
         public event Action<double> TimeChanged;
         public event Action<MediaItem> ClipSelected;
-        public event Action<MediaItem> ItemResized; // <--- Notifies MainForm during drag-resizing
+        public event Action<MediaItem> ItemResized;
 
         public MediaItem SelectedItem { get; private set; }
 
@@ -87,10 +91,16 @@ namespace VideoEditor.Controls
                 if (item == SelectedItem) color = Color.Crimson;
 
                 g.FillRectangle(new SolidBrush(color), rect);
-                g.DrawRectangle(item == SelectedItem ? new Pen(Color.Yellow, 2) : Pens.White, rect);
-                g.DrawString($"{System.IO.Path.GetFileName(item.FilePath)} ({item.Duration:F1}s)", this.Font, Brushes.White, x + 5, y + 15);
 
-                // Render Resize Handle indicators on edges
+                // --- AUDIO WAVEFORM / BAR GRAPH RENDER ---
+                if (item.Type == MediaType.Audio)
+                {
+                    DrawAudioWaveform(g, item, rect);
+                }
+
+                g.DrawRectangle(item == SelectedItem ? new Pen(Color.Yellow, 2) : Pens.White, rect);
+                g.DrawString($"{Path.GetFileName(item.FilePath)} ({item.Duration:F1}s)", this.Font, Brushes.White, x + 5, y + 2);
+
                 if (item == SelectedItem)
                 {
                     g.FillRectangle(Brushes.White, x + width - 4, y, 4, trackHeight);
@@ -100,6 +110,80 @@ namespace VideoEditor.Controls
             // 4. Draw Playhead
             int playheadX = (int)(currentTime * pixelsPerSecond);
             g.DrawLine(new Pen(Color.Red, 2), playheadX, 0, playheadX, this.Height);
+        }
+
+        private void DrawAudioWaveform(Graphics g, MediaItem item, Rectangle clipRect)
+        {
+            if (!waveformCache.ContainsKey(item.FilePath))
+            {
+                waveformCache[item.FilePath] = GenerateAudioPeaks(item.FilePath);
+            }
+
+            float[] peaks = waveformCache[item.FilePath];
+            if (peaks == null || peaks.Length == 0) return;
+
+            int barWidth = 2; // Width of each sound bar
+            int gap = 1;      // Gap between sound bars
+            int totalBarSpace = barWidth + gap;
+            int numBarsToDraw = clipRect.Width / totalBarSpace;
+
+            int centerY = clipRect.Y + (clipRect.Height / 2);
+            int maxBarHeight = (clipRect.Height / 2) - 4;
+
+            using (var wavePen = new Pen(Color.FromArgb(200, 255, 255, 255), barWidth))
+            {
+                for (int i = 0; i < numBarsToDraw; i++)
+                {
+                    int barX = clipRect.X + (i * totalBarSpace);
+                    if (barX >= clipRect.Right) break;
+
+                    // Map clip width position to audio amplitude sample array
+                    float progress = (float)i / numBarsToDraw;
+                    int peakIndex = (int)(progress * peaks.Length);
+                    peakIndex = Math.Clamp(peakIndex, 0, peaks.Length - 1);
+
+                    int height = (int)(peaks[peakIndex] * maxBarHeight);
+                    height = Math.Max(height, 2); // Minimum visible bar indicator
+
+                    g.DrawLine(wavePen, barX, centerY - height, barX, centerY + height);
+                }
+            }
+        }
+
+        private float[] GenerateAudioPeaks(string filePath)
+        {
+            try
+            {
+                if (!File.Exists(filePath)) return new float[0];
+
+                byte[] fileBytes = File.ReadAllBytes(filePath);
+                int sampleCount = 200; // Number of bars to represent the audio track
+                float[] peaks = new float[sampleCount];
+                int step = Math.Max(1, fileBytes.Length / sampleCount);
+
+                for (int i = 0; i < sampleCount; i++)
+                {
+                    int start = i * step;
+                    int end = Math.Min(start + step, fileBytes.Length);
+                    float max = 0;
+
+                    for (int j = start; j < end; j += 2)
+                    {
+                        if (j + 1 < fileBytes.Length)
+                        {
+                            short sample = (short)(fileBytes[j] | (fileBytes[j + 1] << 8));
+                            float abs = Math.Abs(sample / 32768f);
+                            if (abs > max) max = abs;
+                        }
+                    }
+                    peaks[i] = Math.Min(max * 2.5f, 1.0f); // Normalize & amplify visual contrast
+                }
+                return peaks;
+            }
+            catch
+            {
+                return new float[0];
+            }
         }
 
         private void Timeline_MouseDown(object sender, MouseEventArgs e)
@@ -129,7 +213,6 @@ namespace VideoEditor.Controls
                     ClipSelected?.Invoke(item);
                     activeClip = item;
 
-                    // Check if mouse is near the right edge for resizing clip duration
                     if (e.X >= (x + width - EdgeMargin) && e.X <= (x + width + EdgeMargin))
                     {
                         isResizingClip = true;
@@ -154,7 +237,6 @@ namespace VideoEditor.Controls
             int imageTrackY = headerHeight + 5;
             int audioTrackY = imageTrackY + trackHeight + 5;
 
-            // Change mouse cursor over edges when hovering
             if (!isDraggingClip && !isResizingClip && !isDraggingPlayhead)
             {
                 bool overEdge = false;
@@ -179,11 +261,8 @@ namespace VideoEditor.Controls
             }
             else if (isResizingClip && activeClip != null)
             {
-                // Dragging right edge adjusts duration dynamically
                 double newDuration = (e.X / pixelsPerSecond) - activeClip.StartTime;
-                activeClip.Duration = Math.Max(0.5, newDuration); // Prevent 0-length clips
-
-                // Fire live resize event to trigger auto-split duration updates in MainForm
+                activeClip.Duration = Math.Max(0.5, newDuration);
                 ItemResized?.Invoke(activeClip);
 
                 this.Invalidate();
