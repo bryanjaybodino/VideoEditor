@@ -608,8 +608,8 @@ namespace VideoEditor
                 SourceOffset = 0,
                 StartTime = nextStartTime,
                 AudioPeaks = audioPeaks,
-                InEffect = new TransitionEffect { Type = "ZoomBlurUp", Duration = halfDuration },
-                OutEffect = new TransitionEffect { Type = "ZoomBlurDown", Duration = halfDuration }
+                InEffect = new TransitionEffect { Type = "DynamicZoomBlur", Duration = halfDuration },
+                OutEffect = new TransitionEffect { Type = "DynamicZoomBlur", Duration = halfDuration }
             };
 
             mediaItems.Add(item);
