@@ -1,7 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Drawing;
-using System.Windows.Forms;
 
 namespace VideoEditor.Models
 {
@@ -9,83 +7,63 @@ namespace VideoEditor.Models
     {
         Image,
         Audio,
-        Video
+        Text
     }
 
     public class TransitionEffect
     {
         public string Type { get; set; } = "None";
-        public double Duration { get; set; } = 0.5;
-    }
-
-    public class MediaItem
-    {
-        public string Id { get; set; } = Guid.NewGuid().ToString();
-        public string FilePath { get; set; }
-        public MediaType Type { get; set; }
-        public double Duration { get; set; } = 3.0;
-        public double StartTime { get; set; } = 0.0;
-        public int TrackIndex { get; set; } = 0;
-
-        public double OriginalDuration { get; set; } = 0;
-        public double SourceOffset { get; set; } = 0;
-
-        // Waveform Cache Data
-        public float[] AudioPeaks { get; set; }
-
-        public TransitionEffect InEffect { get; set; } = new TransitionEffect { Type = "Fade", Duration = 0.5 };
-        public TransitionEffect OutEffect { get; set; } = new TransitionEffect { Type = "None", Duration = 0.5 };
-
-        public List<TextLabel> TextLabels { get; set; } = new List<TextLabel>();
-
-        public float Scale { get; set; } = 1.0f;
-        public float PositionX { get; set; } = 0.0f;
-        public float PositionY { get; set; } = 0.0f;
+        public double Duration { get; set; } = 1.0;
     }
 
     public class TextLabel
     {
-        public string Id { get; set; } = Guid.NewGuid().ToString();
-        public string Content { get; set; }
-        public float X { get; set; }
-        public float Y { get; set; }
-        public float FontSize { get; set; } = 24;
-        public Color Color { get; set; } = Color.White;
-        public string FontFamily { get; set; } = "Segoe UI";
+        public float RelativeX { get; set; } = 0.1f;
+        public float RelativeY { get; set; } = 0.1f;
+        public float RelativeWidth { get; set; } = 0.35f;
+        public float RelativeHeight { get; set; } = 0.08f;
+        public string Content { get; set; } = "Sample Text";
+        public float X { get; set; } = 100;
+        public float Y { get; set; } = 100;
+        public float Width { get; set; } = 300;
+        public float Height { get; set; } = 80;
+        public float FontSize { get; set; } = 32;
+        public string FontFamily { get; set; } = "Arial";
+        public Color TextColor { get; set; } = Color.White;
+        public Color BackgroundColor { get; set; } = Color.FromArgb(128, 0, 0, 0);
+        public bool IsBold { get; set; } = false;
+
         public double StartTime { get; set; }
-        public double Duration { get; set; }
-        public bool IsBold { get; set; }
-        public bool IsItalic { get; set; }
+        public double Duration { get; set; } = 3.0;
     }
 
     public class Caption
     {
-        public string Text { get; set; }
+        public string Text { get; set; } = string.Empty;
         public double StartTime { get; set; }
         public double EndTime { get; set; }
-        public int ConfidenceScore { get; set; }
+        public double Duration => EndTime - StartTime;
     }
 
-    public class ProjectState
+    public class MediaItem
     {
-        public ListBox MediaListView { get; set; }
-        public Panel PropertiesPanel { get; set; }
-        public int SelectedItemIndex { get; set; } = -1;
-        public string ProjectName { get; set; } = "Untitled Project";
-        public DateTime CreatedDate { get; set; } = DateTime.Now;
-    }
-
-    public enum EffectType
-    {
-        Blur
-    }
-
-    public class EffectItem
-    {
-        public string Id { get; set; } = Guid.NewGuid().ToString();
-        public EffectType Type { get; set; } = EffectType.Blur;
+        public string FilePath { get; set; }
+        public MediaType Type { get; set; }
         public double StartTime { get; set; }
-        public double Duration { get; set; } = 3.0;
-        public float Intensity { get; set; } = 10.0f;
+        public double Duration { get; set; }
+        public double OriginalDuration { get; set; }
+        public double SourceOffset { get; set; }
+        public float PositionX { get; set; } = 0;
+        public float PositionY { get; set; } = 0;
+        public float Scale { get; set; } = 1.0f;
+        public int TrackIndex { get; set; } = 0;
+
+        public float[] AudioPeaks { get; set; }
+        public TransitionEffect InEffect { get; set; }
+        public TransitionEffect OutEffect { get; set; }
+
+        public List<TextLabel> TextLabels { get; set; } = new List<TextLabel>();
+        public TextLabel TextData { get; set; }
+        public List<Caption> Captions { get; set; } = new List<Caption>();
     }
 }

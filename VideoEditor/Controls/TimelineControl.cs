@@ -74,22 +74,22 @@ namespace VideoEditor.Controls
             this.Resize += (s, e) => UpdateScrollBars();
         }
 
-        private int GetMaxImageTrackIndex()
+        private int GetMaxVisualTrackIndex()
         {
-            var imageItems = mediaItems.Where(x => x.Type == MediaType.Image);
-            int maxTrack = imageItems.Any() ? imageItems.Max(x => x.TrackIndex) : 0;
+            var visualItems = mediaItems.Where(x => x.Type == MediaType.Image || x.Type == MediaType.Text);
+            int maxTrack = visualItems.Any() ? visualItems.Max(x => x.TrackIndex) : 0;
             return Math.Max(maxTrack + 1, 2);
         }
 
         private int GetTotalContentHeight()
         {
-            int totalTracks = GetMaxImageTrackIndex() + 1;
+            int totalTracks = GetMaxVisualTrackIndex() + 1;
             return headerHeight + (totalTracks * (trackHeight + trackMargin)) + 20;
         }
 
         private int GetTrackY(int trackIndex, MediaType type)
         {
-            int relativeIndex = type == MediaType.Audio ? GetMaxImageTrackIndex() : trackIndex;
+            int relativeIndex = type == MediaType.Audio ? GetMaxVisualTrackIndex() : trackIndex;
             return headerHeight + trackMargin + (relativeIndex * (trackHeight + trackMargin)) - scrollY;
         }
 
@@ -138,8 +138,8 @@ namespace VideoEditor.Controls
             UpdateScrollBars();
 
             // 1. Tracks Background
-            int maxImageTracks = GetMaxImageTrackIndex();
-            for (int i = 0; i < maxImageTracks; i++)
+            int maxVisualTracks = GetMaxVisualTrackIndex();
+            for (int i = 0; i < maxVisualTracks; i++)
             {
                 int trackY = GetTrackY(i, MediaType.Image);
                 if (trackY + trackHeight < headerHeight || trackY > this.Height) continue;
@@ -165,11 +165,19 @@ namespace VideoEditor.Controls
                 var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
                 if (rect.Bottom < headerHeight || rect.Top > this.Height || rect.Right < 0 || rect.Left > this.Width) continue;
 
-                var color = item.Type == MediaType.Image ? Color.SteelBlue : Color.FromArgb(30, 70, 70);
+                var color = Color.SteelBlue;
+                if (item.Type == MediaType.Audio) color = Color.FromArgb(30, 70, 70);
+                else if (item.Type == MediaType.Text) color = Color.DarkGoldenrod;
+
                 if (item == SelectedItem) color = Color.Crimson;
 
                 // Clip Container
                 g.FillRectangle(new SolidBrush(color), rect);
+
+                if (item.Type == MediaType.Text && item.TextData != null)
+                {
+                    g.DrawString(item.TextData.Content, this.Font, Brushes.White, rect.X + 5, rect.Y + 12);
+                }
 
                 // Render Audio Waveform inside OnPaint loop
                 if (item.Type == MediaType.Audio && item.AudioPeaks != null && item.AudioPeaks.Length > 0)
@@ -179,17 +187,14 @@ namespace VideoEditor.Controls
                         int centerY = rect.Y + (rect.Height / 2);
                         int peakCount = item.AudioPeaks.Length;
 
-                        // Total duration of the source audio file
                         double fullAudioDur = item.OriginalDuration > 0 ? item.OriginalDuration : item.Duration;
                         if (fullAudioDur <= 0) fullAudioDur = item.Duration;
 
                         for (int px = 2; px < rect.Width - 2; px++)
                         {
-                            // Calculate exact time position in the source audio file for this pixel
                             double localTime = ((double)px / rect.Width) * item.Duration;
                             double sourceFileTime = item.SourceOffset + localTime;
 
-                            // Map source file time to the correct index in the peak array
                             double fileProgress = sourceFileTime / fullAudioDur;
                             int sampleIdx = (int)(fileProgress * peakCount);
 
@@ -204,10 +209,30 @@ namespace VideoEditor.Controls
                         }
                     }
                 }
+
+                // Render Text Label Duration Rectangles inside the Media Item track
+                if (item.TextLabels != null)
+                {
+                    foreach (var label in item.TextLabels)
+                    {
+                        int labelX = (int)((item.StartTime + label.StartTime) * pixelsPerSecond) - scrollX;
+                        int labelWidth = (int)(label.Duration * pixelsPerSecond);
+                        var textRect = new Rectangle(labelX, rect.Y + rect.Height - 18, Math.Max(labelWidth, 4), 14);
+
+                        using (var textBgBrush = new SolidBrush(Color.FromArgb(200, 255, 165, 0)))
+                        {
+                            g.FillRectangle(textBgBrush, textRect);
+                        }
+                        using (var textBorder = new Pen(Color.Black, 1))
+                        {
+                            g.DrawRectangle(textBorder, textRect);
+                        }
+                    }
+                }
             }
 
-                // 3. Pinned Time Header
-                g.FillRectangle(new SolidBrush(Color.FromArgb(35, 35, 35)), 0, 0, this.Width, headerHeight);
+            // 3. Pinned Time Header
+            g.FillRectangle(new SolidBrush(Color.FromArgb(35, 35, 35)), 0, 0, this.Width, headerHeight);
             double visibleDuration = (this.Width + scrollX) / pixelsPerSecond;
             int stepSeconds = pixelsPerSecond < 20 ? 10 : (pixelsPerSecond < 50 ? 2 : 1);
 
@@ -284,7 +309,7 @@ namespace VideoEditor.Controls
                 double newStart = ((e.X + scrollX) / pixelsPerSecond) - clipDragOffset;
                 activeClip.StartTime = Math.Max(0, newStart);
 
-                if (activeClip.Type == MediaType.Image)
+                if (activeClip.Type == MediaType.Image || activeClip.Type == MediaType.Text)
                 {
                     activeClip.TrackIndex = GetTrackIndexFromY(e.Y, activeClip.Type);
                 }

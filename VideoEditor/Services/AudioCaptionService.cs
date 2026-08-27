@@ -108,7 +108,7 @@ except Exception as e:
                         Text = textMatch.Groups[1].Value,
                         StartTime = double.Parse(startMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture),
                         EndTime = double.Parse(endMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture),
-                        ConfidenceScore = 90
+
                     });
                 }
             }
@@ -132,7 +132,7 @@ except Exception as e:
                             X = 200,
                             Y = 400,
                             FontSize = 28,
-                            Color = System.Drawing.Color.Yellow,
+                            TextColor = System.Drawing.Color.Yellow,
                             FontFamily = "Segoe UI",
                             StartTime = caption.StartTime - item.StartTime,
                             Duration = caption.EndTime - caption.StartTime,

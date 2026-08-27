@@ -43,6 +43,14 @@ namespace VideoEditor
         private NumericUpDown numInDuration;
         private ComboBox cbOutEffect;
         private NumericUpDown numOutDuration;
+
+        // Sidebar styling fields
+        private NumericUpDown numFontSize;
+        private Button btnTextColor;
+        private Button btnBgColor;
+        private NumericUpDown numBoxWidth;
+        private NumericUpDown numBoxHeight;
+
         private bool isBindingUI = false;
 
         public MainForm()
@@ -101,10 +109,8 @@ namespace VideoEditor
             {
                 EnsureAudioLoaded(audioItem.FilePath);
 
-                // Check if timeline playhead is within the audio item's duration block
                 if (timePosition >= audioItem.StartTime && timePosition < (audioItem.StartTime + audioItem.Duration))
                 {
-                    // Calculate precise offset from the start of the audio clip plus any source offset
                     double relativeSecs = (timePosition - audioItem.StartTime) + audioItem.SourceOffset;
                     audioPlayer.Position = TimeSpan.FromSeconds(Math.Max(0, relativeSecs));
 
@@ -211,12 +217,22 @@ namespace VideoEditor
             {
                 previewControl.SelectedItem = selectedItem;
                 BindSelectedMediaToUI(selectedItem);
+                if (selectedItem?.Type == MediaType.Text && selectedItem.TextData != null)
+                {
+                    BindTextLabelToUI(selectedItem.TextData);
+                    previewControl.SelectedTextLabel = selectedItem.TextData;
+                }
                 previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
             };
 
             timelineControl.ItemResized += (resizedItem) =>
             {
                 TimelineControl_ItemResized(timelineControl, resizedItem);
+            };
+
+            previewControl.TextLabelSelected += (label) =>
+            {
+                BindTextLabelToUI(label);
             };
 
             timelineControl.MouseDown += (s, e) =>
@@ -243,8 +259,8 @@ namespace VideoEditor
             var panel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(35, 35, 35),
-                Padding = new Padding(15),
+                BackColor = Color.FromArgb(30, 30, 30),
+                Padding = new Padding(12),
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false,
                 AutoScroll = true
@@ -254,45 +270,136 @@ namespace VideoEditor
             {
                 Text = "Editing Actions",
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 AutoSize = true,
-                Margin = new Padding(0, 0, 0, 10)
+                Margin = new Padding(0, 0, 0, 8)
             });
 
+            // --- TIMELINE ACTIONS ---
             panel.Controls.Add(CreateActionButton("✂ Split Clip", () => SplitSelectedClip()));
             panel.Controls.Add(CreateActionButton("✂◄ Split Left (Trim Left)", () => SplitLeftSelectedClip()));
             panel.Controls.Add(CreateActionButton("►✂ Split Right (Trim Right)", () => SplitRightSelectedClip()));
 
-            panel.Controls.Add(new Label { Height = 1, Width = 220, BackColor = Color.Gray, Margin = new Padding(0, 10, 0, 10) });
+            panel.Controls.Add(new Label { Height = 1, Width = 230, BackColor = Color.FromArgb(60, 60, 60), Margin = new Padding(0, 10, 0, 10) });
 
-            panel.Controls.Add(CreateSectionHeader("Total Clip Duration (s)"));
+            // --- TEXT OVERLAY TOOLKIT ---
+            panel.Controls.Add(CreateSectionHeader("Text Overlays"));
+
+            panel.Controls.Add(CreateStyledButton("➕ Add Text Layer", () =>
+            {
+                var newLabel = new TextLabel
+                {
+                    Content = "Type text here...",
+                    X = 100,
+                    Y = 200,
+                    Width = 350,
+                    Height = 90,
+                    FontSize = (float)numFontSize.Value,
+                };
+
+                var textMediaItem = new MediaItem
+                {
+                    Type = MediaType.Text,
+                    StartTime = timelineControl.CurrentTime,
+                    Duration = 3.0,
+                    TextData = newLabel
+                };
+
+                mediaItems.Add(textMediaItem);
+                mediaListBox.Items.Add($"Text: {newLabel.Content}");
+                previewControl.SelectedTextLabel = newLabel;
+                RefreshTimeline();
+            }));
+
+            panel.Controls.Add(CreateSubLabel("Font Size:"));
+            numFontSize = new NumericUpDown { Width = 230, Minimum = 10, Maximum = 120, Value = 32, BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White };
+            numFontSize.ValueChanged += (s, e) => { if (!isBindingUI && previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.FontSize = (float)numFontSize.Value; previewControl.Invalidate(); } };
+            panel.Controls.Add(numFontSize);
+
+            var colorFlow = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, Width = 230, Height = 40, WrapContents = false };
+            btnTextColor = CreateMiniColorButton("Text Color", Color.White, c => { if (previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.TextColor = c; previewControl.Invalidate(); } });
+            btnBgColor = CreateMiniColorButton("Bg Color", Color.FromArgb(128, 0, 0, 0), c => { if (previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.BackgroundColor = c; previewControl.Invalidate(); } });
+            colorFlow.Controls.Add(btnTextColor);
+            colorFlow.Controls.Add(btnBgColor);
+            panel.Controls.Add(colorFlow);
+
+            panel.Controls.Add(CreateSubLabel("Box Boundaries (Width / Height):"));
+            var sizeFlow = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, Width = 230, Height = 35, WrapContents = false };
+            numBoxWidth = new NumericUpDown { Width = 110, Minimum = 50, Maximum = 1080, Value = 350, BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White };
+            numBoxHeight = new NumericUpDown { Width = 110, Minimum = 30, Maximum = 1920, Value = 90, BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White };
+
+            numBoxWidth.ValueChanged += (s, e) => { if (!isBindingUI && previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.Width = (float)numBoxWidth.Value; previewControl.Invalidate(); } };
+            numBoxHeight.ValueChanged += (s, e) => { if (!isBindingUI && previewControl.SelectedTextLabel != null) { previewControl.SelectedTextLabel.Height = (float)numBoxHeight.Value; previewControl.Invalidate(); } };
+
+            sizeFlow.Controls.Add(numBoxWidth);
+            sizeFlow.Controls.Add(numBoxHeight);
+            panel.Controls.Add(sizeFlow);
+
+            panel.Controls.Add(new Label { Height = 1, Width = 230, BackColor = Color.FromArgb(60, 60, 60), Margin = new Padding(0, 10, 0, 10) });
+
+            // --- ANIMATIONS & TIMING ---
+            panel.Controls.Add(CreateSectionHeader("Clip Animations"));
+            panel.Controls.Add(CreateSubLabel("Total Clip Duration (s)"));
             numDuration = CreateNumberInput();
             numDuration.ValueChanged += NumDuration_ValueChanged;
             panel.Controls.Add(numDuration);
 
-            panel.Controls.Add(new Label { Height = 1, Width = 220, BackColor = Color.Gray, Margin = new Padding(0, 10, 0, 10) });
-
-            panel.Controls.Add(CreateSectionHeader("In Animation (Entrance)"));
+            panel.Controls.Add(CreateSubLabel("In Animation (Entrance)"));
             cbInEffect = CreateEffectDropdown();
             cbInEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
             panel.Controls.Add(cbInEffect);
 
-            panel.Controls.Add(CreateSubLabel("In Duration (s):"));
+            panel.Controls.Add(CreateSubLabel("In Duration (s)"));
             numInDuration = CreateNumberInput();
-            numInDuration.ReadOnly = true;
+            numInDuration.ValueChanged += (s, e) => SaveAnimationSettings();
             panel.Controls.Add(numInDuration);
 
-            panel.Controls.Add(CreateSectionHeader("Out Animation (Exit)"));
+            panel.Controls.Add(CreateSubLabel("Out Animation (Exit)"));
             cbOutEffect = CreateEffectDropdown();
             cbOutEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
             panel.Controls.Add(cbOutEffect);
 
-            panel.Controls.Add(CreateSubLabel("Out Duration (s):"));
+            panel.Controls.Add(CreateSubLabel("Out Duration (s)"));
             numOutDuration = CreateNumberInput();
-            numOutDuration.ReadOnly = true;
+            numOutDuration.ValueChanged += (s, e) => SaveAnimationSettings();
             panel.Controls.Add(numOutDuration);
 
             return panel;
+        }
+
+        private Button CreateMiniColorButton(string title, Color initialColor, Action<Color> onColorPicked)
+        {
+            var btn = new Button
+            {
+                Text = title,
+                Width = 110,
+                Height = 28,
+                BackColor = Color.FromArgb(55, 55, 55),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8)
+            };
+            btn.Click += (s, e) =>
+            {
+                using (var cd = new ColorDialog { Color = initialColor })
+                {
+                    if (cd.ShowDialog() == DialogResult.OK)
+                    {
+                        onColorPicked?.Invoke(cd.Color);
+                    }
+                }
+            };
+            return btn;
+        }
+
+        private void BindTextLabelToUI(TextLabel label)
+        {
+            if (label == null) return;
+            isBindingUI = true;
+            numFontSize.Value = (decimal)Math.Clamp(label.FontSize, 10, 120);
+            numBoxWidth.Value = (decimal)Math.Clamp(label.Width, 50, 1080);
+            numBoxHeight.Value = (decimal)Math.Clamp(label.Height, 30, 1920);
+            isBindingUI = false;
         }
 
         private float[] ExtractAudioPeaks(string filePath, int targetPeakCount = 1000)
@@ -303,13 +410,12 @@ namespace VideoEditor
                 using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
                 using (var reader = new BinaryReader(fs))
                 {
-                    // Check for ID3 header at the start of the file and skip if present
                     if (fs.Length > 10)
                     {
                         char[] id3Check = reader.ReadChars(3);
                         if (new string(id3Check) == "ID3")
                         {
-                            reader.ReadBytes(3); // Version and flags
+                            reader.ReadBytes(3);
                             byte b1 = reader.ReadByte();
                             byte b2 = reader.ReadByte();
                             byte b3 = reader.ReadByte();
@@ -325,7 +431,7 @@ namespace VideoEditor
 
                     string riff = new string(reader.ReadChars(4));
                     if (riff != "RIFF") throw new FormatException("Not a valid RIFF file");
-                    reader.ReadInt32(); // File size
+                    reader.ReadInt32();
                     string wave = new string(reader.ReadChars(4));
                     if (wave != "WAVE") throw new FormatException("Not a valid WAVE file");
 
@@ -340,11 +446,11 @@ namespace VideoEditor
 
                         if (chunkId == "fmt ")
                         {
-                            reader.ReadInt16(); // Audio format
+                            reader.ReadInt16();
                             channels = reader.ReadInt16();
-                            reader.ReadInt32(); // Sample rate
-                            reader.ReadInt32(); // Byte rate
-                            reader.ReadInt16(); // Block align
+                            reader.ReadInt32();
+                            reader.ReadInt32();
+                            reader.ReadInt16();
                             bitsPerSample = reader.ReadInt16();
                             if (chunkSize > 16)
                             {
@@ -403,8 +509,6 @@ namespace VideoEditor
             }
             catch
             {
-                // Fallback for non-WAV formats (like MP3) or unparsable streams: 
-                // Generates a stable, natural-looking envelope based on file characteristics
                 int seed = filePath.GetHashCode();
                 var rng = new Random(seed);
                 float currentVal = 0.3f;
@@ -439,15 +543,18 @@ namespace VideoEditor
             if (isBindingUI) return;
 
             var item = timelineControl.SelectedItem;
-            if (item != null && item.Type == MediaType.Image)
+            if (item != null)
             {
                 item.Duration = (double)numDuration.Value;
-                UpdateSplitEffectDurations(item);
+                if (item.Type == MediaType.Image)
+                {
+                    UpdateSplitEffectDurations(item);
 
-                isBindingUI = true;
-                numInDuration.Value = (decimal)item.InEffect.Duration;
-                numOutDuration.Value = (decimal)item.OutEffect.Duration;
-                isBindingUI = false;
+                    isBindingUI = true;
+                    if (numInDuration != null) numInDuration.Value = (decimal)item.InEffect.Duration;
+                    if (numOutDuration != null) numOutDuration.Value = (decimal)item.OutEffect.Duration;
+                    isBindingUI = false;
+                }
 
                 RefreshTimeline();
             }
@@ -466,12 +573,8 @@ namespace VideoEditor
                 item.InEffect.Type = cbInEffect.SelectedItem?.ToString() ?? "None";
                 item.OutEffect.Type = cbOutEffect.SelectedItem?.ToString() ?? "None";
 
-                UpdateSplitEffectDurations(item);
-
-                isBindingUI = true;
-                numInDuration.Value = (decimal)item.InEffect.Duration;
-                numOutDuration.Value = (decimal)item.OutEffect.Duration;
-                isBindingUI = false;
+                if (numInDuration != null) item.InEffect.Duration = (double)numInDuration.Value;
+                if (numOutDuration != null) item.OutEffect.Duration = (double)numOutDuration.Value;
 
                 RefreshTimeline();
             }
@@ -521,7 +624,7 @@ namespace VideoEditor
         {
             var cb = new ComboBox
             {
-                Width = 220,
+                Width = 230,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = Color.FromArgb(55, 55, 55),
                 ForeColor = Color.White,
@@ -541,7 +644,7 @@ namespace VideoEditor
         {
             return new NumericUpDown
             {
-                Width = 220,
+                Width = 230,
                 Minimum = 0.0m,
                 Maximum = 60.0m,
                 DecimalPlaces = 2,
@@ -553,20 +656,24 @@ namespace VideoEditor
 
         private void TimelineControl_ItemResized(object sender, MediaItem item)
         {
-            if (item != null && item.Type == MediaType.Image)
+            if (item != null)
             {
-                UpdateSplitEffectDurations(item);
+                if (item.Type == MediaType.Image)
+                {
+                    UpdateSplitEffectDurations(item);
+                }
 
                 if (timelineControl.SelectedItem == item)
                 {
                     isBindingUI = true;
 
-                    numDuration.Value = (decimal)Math.Clamp(item.Duration, (double)numDuration.Minimum, (double)numDuration.Maximum);
+                    if (numDuration != null)
+                        numDuration.Value = (decimal)Math.Clamp(item.Duration, (double)numDuration.Minimum, (double)numDuration.Maximum);
 
-                    if (item.InEffect != null)
+                    if (numInDuration != null && item.InEffect != null)
                         numInDuration.Value = (decimal)Math.Clamp(item.InEffect.Duration, (double)numInDuration.Minimum, (double)numInDuration.Maximum);
 
-                    if (item.OutEffect != null)
+                    if (numOutDuration != null && item.OutEffect != null)
                         numOutDuration.Value = (decimal)Math.Clamp(item.OutEffect.Duration, (double)numOutDuration.Minimum, (double)numOutDuration.Maximum);
 
                     isBindingUI = false;
@@ -578,21 +685,29 @@ namespace VideoEditor
 
         private void BindSelectedMediaToUI(MediaItem item)
         {
-            if (item == null || item.Type != MediaType.Image) return;
+            if (item == null) return;
 
             isBindingUI = true;
 
-            numDuration.Value = (decimal)Math.Clamp(item.Duration, (double)numDuration.Minimum, (double)numDuration.Maximum);
-            cbInEffect.SelectedItem = item.InEffect?.Type ?? "None";
-            cbOutEffect.SelectedItem = item.OutEffect?.Type ?? "None";
+            if (numDuration != null)
+                numDuration.Value = (decimal)Math.Clamp(item.Duration, (double)numDuration.Minimum, (double)numDuration.Maximum);
 
-            UpdateSplitEffectDurations(item);
+            if (item.Type == MediaType.Image)
+            {
+                if (cbInEffect != null) cbInEffect.SelectedItem = item.InEffect?.Type ?? "None";
+                if (cbOutEffect != null) cbOutEffect.SelectedItem = item.OutEffect?.Type ?? "None";
 
-            double inDur = item.InEffect?.Duration ?? 0;
-            double outDur = item.OutEffect?.Duration ?? 0;
+                UpdateSplitEffectDurations(item);
 
-            numInDuration.Value = (decimal)Math.Clamp(inDur, (double)numInDuration.Minimum, (double)numInDuration.Maximum);
-            numOutDuration.Value = (decimal)Math.Clamp(outDur, (double)numOutDuration.Minimum, (double)numOutDuration.Maximum);
+                double inDur = item.InEffect?.Duration ?? 0;
+                double outDur = item.OutEffect?.Duration ?? 0;
+
+                if (numInDuration != null)
+                    numInDuration.Value = (decimal)Math.Clamp(inDur, (double)numInDuration.Minimum, (double)numInDuration.Maximum);
+
+                if (numOutDuration != null)
+                    numOutDuration.Value = (decimal)Math.Clamp(outDur, (double)numOutDuration.Minimum, (double)numOutDuration.Maximum);
+            }
 
             isBindingUI = false;
         }
@@ -602,7 +717,7 @@ namespace VideoEditor
             var btn = new Button
             {
                 Text = text,
-                Width = 220,
+                Width = 230,
                 Height = 32,
                 BackColor = Color.FromArgb(50, 50, 50),
                 ForeColor = Color.White,
@@ -629,7 +744,7 @@ namespace VideoEditor
                 double originalDuration = item.Duration;
 
                 item.Duration = splitPointRelative;
-                UpdateSplitEffectDurations(item);
+                if (item.Type == MediaType.Image) UpdateSplitEffectDurations(item);
 
                 var newItem = new MediaItem
                 {
@@ -637,14 +752,15 @@ namespace VideoEditor
                     Type = item.Type,
                     StartTime = playhead,
                     Duration = originalDuration - splitPointRelative,
-                    InEffect = new TransitionEffect { Type = item.InEffect.Type },
-                    OutEffect = new TransitionEffect { Type = item.OutEffect.Type }
+                    InEffect = item.InEffect != null ? new TransitionEffect { Type = item.InEffect.Type } : null,
+                    OutEffect = item.OutEffect != null ? new TransitionEffect { Type = item.OutEffect.Type } : null,
+                    TextData = item.TextData != null ? new TextLabel { Content = item.TextData.Content, X = item.TextData.X, Y = item.TextData.Y, Width = item.TextData.Width, Height = item.TextData.Height, FontSize = item.TextData.FontSize, TextColor = item.TextData.TextColor, BackgroundColor = item.TextData.BackgroundColor } : null
                 };
 
-                UpdateSplitEffectDurations(newItem);
+                if (newItem.Type == MediaType.Image) UpdateSplitEffectDurations(newItem);
 
                 mediaItems.Add(newItem);
-                mediaListBox.Items.Add(Path.GetFileName(newItem.FilePath));
+                mediaListBox.Items.Add(Path.GetFileName(newItem.FilePath) ?? "Text Layer");
                 RefreshTimeline();
             }
         }
@@ -689,6 +805,7 @@ namespace VideoEditor
             previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
         }
 
+
         private Control CreateToolbar()
         {
             var toolbar = new FlowLayoutPanel
@@ -727,7 +844,10 @@ namespace VideoEditor
                             {
                                 await exportService.ExportToVideo(mediaItems, sfd.FileName, (time, g) =>
                                 {
-                                    RenderPreviewAtTime(time, g, new Size(1080, 1920));
+                                    using (var exportedFrame = VideoRenderHelper.RenderExportFrame(mediaItems, time, 1080, 1920))
+                                    {
+                                        g.DrawImage(exportedFrame, 0, 0, 1080, 1920);
+                                    }
                                 }, progress);
 
                                 progressForm.Close();
@@ -748,20 +868,9 @@ namespace VideoEditor
             }));
             return toolbar;
         }
-
         public void RenderPreviewAtTime(double timePosition, Graphics g, Size canvasSize)
         {
             g.Clear(Color.Black);
-
-            var activeItems = mediaItems
-                .Where(item => item.Type == MediaType.Image &&
-                               timePosition >= item.StartTime &&
-                               timePosition < item.StartTime + item.Duration)
-                .OrderByDescending(item => item.TrackIndex)
-                .ToList();
-
-            if (activeItems.Count == 0)
-                return;
 
             float targetAspect = 9.0f / 16.0f;
             int canvasWidth = canvasSize.Width;
@@ -781,134 +890,54 @@ namespace VideoEditor
 
             g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
 
-            foreach (var activeItem in activeItems)
-            {
-                if (!File.Exists(activeItem.FilePath)) continue;
+            // 1. Render Active Image Frame
+            var activeImage = mediaItems.FirstOrDefault(item => item.Type == MediaType.Image &&
+                                                                timePosition >= item.StartTime &&
+                                                                timePosition < item.StartTime + item.Duration);
 
-                using (var img = Image.FromFile(activeItem.FilePath))
+            if (activeImage != null && File.Exists(activeImage.FilePath))
+            {
+                using (var img = Image.FromFile(activeImage.FilePath))
                 {
-                    float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * activeItem.Scale;
+                    float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * activeImage.Scale;
                     int baseW = (int)(img.Width * scale);
                     int baseH = (int)(img.Height * scale);
 
-                    float offsetXRatio = activeItem.PositionX / (previewControl.LastCanvasWidth > 0 ? previewControl.LastCanvasWidth : canvasWidth);
-                    float offsetYRatio = activeItem.PositionY / (previewControl.LastCanvasHeight > 0 ? previewControl.LastCanvasHeight : canvasHeight);
+                    int originX = canvasX + (canvasWidth - baseW) / 2 + (int)activeImage.PositionX;
+                    int originY = canvasY + (canvasHeight - baseH) / 2 + (int)activeImage.PositionY;
 
-                    int scaledOffsetX = (int)(offsetXRatio * canvasWidth);
-                    int scaledOffsetY = (int)(offsetYRatio * canvasHeight);
+                    g.DrawImage(img, originX, originY, baseW, baseH);
+                }
+            }
 
-                    int originX = canvasX + (canvasWidth - baseW) / 2 + scaledOffsetX;
-                    int originY = canvasY + (canvasHeight - baseH) / 2 + scaledOffsetY;
+            // 2. Render Active Separate Text Layers on top
+            var activeTexts = mediaItems.Where(item => item.Type == MediaType.Text &&
+                                                        item.TextData != null &&
+                                                        timePosition >= item.StartTime &&
+                                                        timePosition < item.StartTime + item.Duration);
 
-                    int x = originX;
-                    int y = originY;
+            foreach (var textItem in activeTexts)
+            {
+                var label = textItem.TextData;
+                float drawX = canvasX + label.X;
+                float drawY = canvasY + label.Y;
+                var rect = new RectangleF(drawX, drawY, Math.Max(label.Width, 50), Math.Max(label.Height, 30));
 
-                    double localTime = timePosition - activeItem.StartTime;
-                    double remainingTime = activeItem.Duration - localTime;
+                using (var bgBrush = new SolidBrush(label.BackgroundColor))
+                {
+                    g.FillRectangle(bgBrush, rect);
+                }
 
-                    float opacity = 1.0f;
-                    float zoomFactor = 1.0f;
-                    float zoomBlurIntensity = 0.0f;
-
-                    // --- IN ANIMATION ---
-                    double inDur = activeItem.InEffect?.Duration ?? 0;
-                    if (localTime >= 0 && localTime < inDur && inDur > 0 && activeItem.InEffect != null)
+                using (var font = new Font(label.FontFamily, label.FontSize, label.IsBold ? FontStyle.Bold : FontStyle.Regular))
+                using (var textBrush = new SolidBrush(label.TextColor))
+                {
+                    var sf = new StringFormat
                     {
-                        float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(localTime / inDur)));
-                        float invertProgress = 1.0f - progress;
-
-                        switch (activeItem.InEffect.Type)
-                        {
-                            case "Fade": opacity *= progress; break;
-                            case "Slide": x = (int)(originX - canvasWidth + (canvasWidth * progress)); break;
-                            case "Wave": y += (int)(Math.Sin(progress * Math.PI * 4) * 15); break;
-                            case "Zoom": zoomFactor *= (0.5f + 0.5f * progress); break;
-                            case "ZoomBlur": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); break;
-                            case "ZoomBlurUp": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); y -= (int)(canvasHeight * invertProgress); break;
-                            case "ZoomBlurDown": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); y += (int)(canvasHeight * invertProgress); break;
-                            case "ZoomBlurLeft": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); x -= (int)(canvasWidth * invertProgress); break;
-                            case "ZoomBlurRight": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); x += (int)(canvasWidth * invertProgress); break;
-                        }
-                    }
-
-                    // --- OUT ANIMATION ---
-                    double outDur = activeItem.OutEffect?.Duration ?? 0;
-                    if (remainingTime >= 0 && remainingTime < outDur && outDur > 0 && activeItem.OutEffect != null)
-                    {
-                        float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(remainingTime / outDur)));
-                        float invertProgress = 1.0f - progress;
-
-                        switch (activeItem.OutEffect.Type)
-                        {
-                            case "Fade": opacity *= progress; break;
-                            case "Slide": x += (int)(canvasWidth * invertProgress); break;
-                            case "Wave": y += (int)(Math.Sin(invertProgress * Math.PI * 4) * 15); break;
-                            case "Zoom": zoomFactor *= (1.0f + 0.5f * invertProgress); break;
-                            case "ZoomBlur": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); break;
-                            case "ZoomBlurUp": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); y -= (int)(canvasHeight * invertProgress); break;
-                            case "ZoomBlurDown": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); y += (int)(canvasHeight * invertProgress); break;
-                            case "ZoomBlurLeft": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); x -= (int)(canvasWidth * invertProgress); break;
-                            case "ZoomBlurRight": zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress); x += (int)(canvasWidth * invertProgress); break;
-                        }
-                    }
-
-                    if (zoomFactor != 1.0f)
-                    {
-                        int newW = (int)(baseW * zoomFactor);
-                        int newH = (int)(baseH * zoomFactor);
-                        x += (baseW - newW) / 2;
-                        y += (baseH - newH) / 2;
-                        baseW = newW;
-                        baseH = newH;
-                    }
-
-                    if (zoomBlurIntensity > 0)
-                    {
-                        int samples = 8;
-                        float maxScale = 1.0f + (zoomBlurIntensity * 0.7f);
-                        int centerX = x + (baseW / 2);
-                        int centerY = y + (baseH / 2);
-
-                        for (int i = 0; i < samples; i++)
-                        {
-                            float stepProgress = (float)i / (samples - 1);
-                            float currentScale = 1.0f + (maxScale - 1.0f) * stepProgress;
-
-                            int stepW = (int)(baseW * currentScale);
-                            int stepH = (int)(baseH * currentScale);
-                            int stepX = centerX - (stepW / 2);
-                            int stepY = centerY - (stepH / 2);
-
-                            using (var attributes = new ImageAttributes())
-                            {
-                                var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity / samples)) };
-                                attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
-                                g.DrawImage(img, new Rectangle(stepX, stepY, stepW, stepH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
-                            }
-                        }
-                    }
-                    else if (opacity < 0.99f)
-                    {
-                        using (var attributes = new ImageAttributes())
-                        {
-                            var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity)) };
-                            attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
-                            g.DrawImage(img, new Rectangle(x, y, baseW, baseH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
-                        }
-                    }
-                    else
-                    {
-                        g.DrawImage(img, x, y, baseW, baseH);
-                    }
-
-                    foreach (var label in activeItem.TextLabels)
-                    {
-                        using (var font = new Font(label.FontFamily, label.FontSize, label.IsBold ? FontStyle.Bold : FontStyle.Regular))
-                        using (var brush = new SolidBrush(label.Color))
-                        {
-                            g.DrawString(label.Content, font, brush, label.X, label.Y);
-                        }
-                    }
+                        Alignment = StringAlignment.Center,
+                        LineAlignment = StringAlignment.Center,
+                        Trimming = StringTrimming.Word
+                    };
+                    g.DrawString(label.Content, font, textBrush, rect, sf);
                 }
             }
 
@@ -997,7 +1026,7 @@ namespace VideoEditor
             if (itemToDelete != null)
             {
                 mediaItems.Remove(itemToDelete);
-                mediaListBox.Items.Remove(Path.GetFileName(itemToDelete.FilePath));
+                mediaListBox.Items.Remove(Path.GetFileName(itemToDelete.FilePath) ?? "Text Layer");
                 timelineControl.Invalidate();
                 previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
             }
@@ -1019,9 +1048,10 @@ namespace VideoEditor
                 BackColor = Color.FromArgb(0, 120, 215),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Width = 120,
+                Width = 230,
                 Height = 32,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold)
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Margin = new Padding(0, 0, 0, 5)
             };
             btn.FlatAppearance.BorderSize = 0;
             btn.Click += (s, e) => onClick?.Invoke();

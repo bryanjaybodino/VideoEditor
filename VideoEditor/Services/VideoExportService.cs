@@ -17,7 +17,93 @@ namespace VideoEditor.Services
         private const int OutputWidth = 1080;
         private const int OutputHeight = 1920;
         private const int TargetFps = 30;
+        public static async Task ExportVideoAsync(
+            List<MediaItem> mediaItems,
+            string outputPath,
+            double totalDuration,
+            int frameRate = 30,
+            int exportWidth = 1080,
+            int exportHeight = 1920,
+            IProgress<int> progress = null)
+        {
+            // 1. Create a temporary folder to store rendered bitmap frames
+            string tempFrameFolder = Path.Combine(Path.GetTempPath(), "VideoEditor_ExportFrames_" + Guid.NewGuid().ToString());
+            Directory.CreateDirectory(tempFrameFolder);
 
+            int totalFrames = (int)Math.Ceiling(totalDuration * frameRate);
+            double frameStep = 1.0 / frameRate;
+
+            try
+            {
+                // 2. FRAME GENERATION LOOP
+                await Task.Run(() =>
+                {
+                    for (int frameIndex = 0; frameIndex < totalFrames; frameIndex++)
+                    {
+                        double currentExportTime = frameIndex * frameStep;
+
+                        // =========================================================================
+                        // CALL RenderExportFrame HERE FOR EACH FRAME TIME POSITION
+                        // =========================================================================
+                        using (Bitmap frameBitmap = VideoRenderHelper.RenderExportFrame(mediaItems, currentExportTime, exportWidth, exportHeight))
+                        {
+                            string frameFileName = Path.Combine(tempFrameFolder, $"frame_{frameIndex:D6}.png");
+                            frameBitmap.Save(frameFileName, ImageFormat.Png);
+                        }
+
+                        // Report rendering progress (0% - 80%)
+                        int currentProgress = (int)(((double)frameIndex / totalFrames) * 80);
+                        progress?.Report(currentProgress);
+                    }
+                });
+
+                // 3. ENCODE FRAMES INTO MP4 USING FFMPEG
+                string ffmpegPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ffmpeg.exe");
+
+                if (!File.Exists(ffmpegPath))
+                {
+                    throw new FileNotFoundException("ffmpeg.exe was not found in the application directory. Please ensure FFmpeg is available.");
+                }
+
+                // Delete output file if it already exists
+                if (File.Exists(outputPath))
+                {
+                    File.Delete(outputPath);
+                }
+
+                // FFmpeg command arguments to compile frame images into video
+                string args = $"-r {frameRate} -i \"{Path.Combine(tempFrameFolder, "frame_%06d.png")}\" " +
+                              $"-c:v libx264 -pix_fmt yuv420p -crf 18 -y \"{outputPath}\"";
+
+                await Task.Run(() =>
+                {
+                    ProcessStartInfo startInfo = new ProcessStartInfo
+                    {
+                        FileName = ffmpegPath,
+                        Arguments = args,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+
+                    using (Process process = Process.Start(startInfo))
+                    {
+                        process.WaitForExit();
+                    }
+                });
+
+                progress?.Report(100);
+            }
+            finally
+            {
+                // Clean up temporary PNG frames after encoding completes
+                if (Directory.Exists(tempFrameFolder))
+                {
+                    Directory.Delete(tempFrameFolder, true);
+                }
+            }
+        }
         public async Task ExportToVideo(List<MediaItem> items, string outputPath, Action<double, Graphics> renderPreviewFrame, IProgress<int> progress = null)
         {
             // 1. Verify FFmpeg binary location

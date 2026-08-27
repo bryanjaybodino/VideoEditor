@@ -7,30 +7,47 @@ using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using VideoEditor.Models;
+using VideoEditor.Services;
 
 namespace VideoEditor.Controls
 {
     public class PreviewControl : Control
     {
         private List<MediaItem> activeFrameItems = new List<MediaItem>();
+        private List<MediaItem> allFrameItems = new List<MediaItem>();
         private Dictionary<string, Image> imageCache = new Dictionary<string, Image>();
         private double currentTimePosition = 0;
 
         private MediaItem selectedPreviewItem = null;
+        private TextLabel selectedTextLabel = null;
         private bool isDraggingImage = false;
+        private bool isDraggingText = false;
+        private bool isResizingText = false;
         private Point lastMousePos;
 
         public int LastCanvasWidth { get; private set; } = 1080;
         public int LastCanvasHeight { get; private set; } = 1920;
 
         public MediaItem SelectedItem { get; set; }
+        public TextLabel SelectedTextLabel
+        {
+            get => selectedTextLabel;
+            set
+            {
+                selectedTextLabel = value;
+                TextLabelSelected?.Invoke(selectedTextLabel);
+                this.Invalidate();
+            }
+        }
 
+        public event Action<TextLabel> TextLabelSelected;
         public event Action ItemTransformChanged;
 
         public PreviewControl()
         {
             this.DoubleBuffered = true;
             this.BackColor = Color.FromArgb(15, 15, 15);
+            this.TabStop = true;
 
             this.MouseDown += PreviewControl_MouseDown;
             this.MouseMove += PreviewControl_MouseMove;
@@ -38,15 +55,49 @@ namespace VideoEditor.Controls
             this.MouseWheel += PreviewControl_MouseWheel;
         }
 
+        protected override bool IsInputKey(Keys keyData)
+        {
+            if (SelectedTextLabel != null) return true;
+            return base.IsInputKey(keyData);
+        }
+
+        protected override void OnKeyPress(KeyPressEventArgs e)
+        {
+            base.OnKeyPress(e);
+            if (SelectedTextLabel != null)
+            {
+                if (e.KeyChar == (char)Keys.Back)
+                {
+                    if (SelectedTextLabel.Content.Length > 0)
+                    {
+                        SelectedTextLabel.Content = SelectedTextLabel.Content.Substring(0, SelectedTextLabel.Content.Length - 1);
+                        this.Invalidate();
+                    }
+                }
+                else if (e.KeyChar == (char)Keys.Enter || e.KeyChar == '\r')
+                {
+                    SelectedTextLabel.Content += Environment.NewLine;
+                    this.Invalidate();
+                }
+                else if (!char.IsControl(e.KeyChar))
+                {
+                    SelectedTextLabel.Content += e.KeyChar;
+                    this.Invalidate();
+                }
+            }
+        }
+
         public void RenderFrame(List<MediaItem> items, double timePosition)
         {
             currentTimePosition = timePosition;
+            allFrameItems = items ?? new List<MediaItem>();
 
-            activeFrameItems = items
+            // Sorted Ascending to match VideoRenderHelper layer order
+            activeFrameItems = allFrameItems
                 .Where(item => item.Type == MediaType.Image &&
                                timePosition >= item.StartTime &&
                                timePosition < item.StartTime + item.Duration)
-                .OrderByDescending(item => item.TrackIndex)
+                .OrderBy(item => item.TrackIndex)
                 .ToList();
 
             foreach (var item in activeFrameItems)
@@ -86,14 +137,39 @@ namespace VideoEditor.Controls
 
             g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
 
-            if (activeFrameItems.Count > 0)
+            var activeTextItems = allFrameItems
+                .Where(item => item.Type == MediaType.Text &&
+                               item.TextData != null &&
+                               currentTimePosition >= item.StartTime &&
+                               currentTimePosition < item.StartTime + item.Duration)
+                .OrderBy(item => item.TrackIndex)
+                .ToList();
+
+            if (activeFrameItems.Count > 0 || activeTextItems.Count > 0)
             {
                 foreach (var item in activeFrameItems)
                 {
                     if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
                     {
-                        DrawTransformedImage(g, img, item, canvasX, canvasY, canvasWidth, canvasHeight);
+                        VideoRenderHelper.DrawImageItem(g, img, item, canvasX, canvasY, canvasWidth, canvasHeight);
                     }
+                }
+
+                foreach (var item in activeFrameItems)
+                {
+                    double localTime = currentTimePosition - item.StartTime;
+                    foreach (var label in item.TextLabels)
+                    {
+                        if (localTime >= label.StartTime && localTime <= label.StartTime + label.Duration)
+                        {
+                            DrawTextLabelWithSelection(g, label, canvasX, canvasY, canvasWidth, canvasHeight);
+                        }
+                    }
+                }
+
+                foreach (var textItem in activeTextItems)
+                {
+                    DrawTextLabelWithSelection(g, textItem.TextData, canvasX, canvasY, canvasWidth, canvasHeight);
                 }
             }
             else
@@ -111,192 +187,121 @@ namespace VideoEditor.Controls
             g.DrawRectangle(Pens.Gray, canvasX, canvasY, canvasWidth, canvasHeight);
         }
 
-        private void DrawTransformedImage(Graphics g, Image img, MediaItem item, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
+        private void DrawTextLabelWithSelection(Graphics g, TextLabel label, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
         {
-            float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * item.Scale;
-            int baseW = (int)(img.Width * scale);
-            int baseH = (int)(img.Height * scale);
+            VideoRenderHelper.DrawTextLabel(g, label, canvasX, canvasY, canvasWidth, canvasHeight);
 
-            int originX = canvasX + (canvasWidth - baseW) / 2 + (int)item.PositionX;
-            int originY = canvasY + (canvasHeight - baseH) / 2 + (int)item.PositionY;
-
-            int x = originX;
-            int y = originY;
-
-            double localTime = currentTimePosition - item.StartTime;
-            double remainingTime = item.Duration - localTime;
-
-            float opacity = 1.0f;
-            float zoomFactor = 1.0f;
-            float zoomBlurIntensity = 0.0f;
-
-            // --- IN ANIMATION ---
-            double inDur = item.InEffect?.Duration ?? 0;
-            if (localTime >= 0 && localTime < inDur && inDur > 0 && item.InEffect != null)
+            if (label == SelectedTextLabel)
             {
-                float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(localTime / inDur)));
-                float invertProgress = 1.0f - progress;
+                float drawX = canvasX + (label.RelativeX * canvasWidth);
+                float drawY = canvasY + (label.RelativeY * canvasHeight);
+                float drawW = Math.Max(label.RelativeWidth * canvasWidth, 50);
+                float drawH = Math.Max(label.RelativeHeight * canvasHeight, 30);
 
-                switch (item.InEffect.Type)
+                using (var pen = new Pen(Color.Cyan, 2) { DashStyle = DashStyle.Dash })
                 {
-                    case "Fade":
-                        opacity *= progress;
-                        break;
-                    case "Slide":
-                        x = (int)(originX - canvasWidth + (canvasWidth * progress));
-                        break;
-                    case "Wave":
-                        y += (int)(Math.Sin(progress * Math.PI * 4) * 15);
-                        break;
-                    case "Zoom":
-                        zoomFactor *= (0.5f + 0.5f * progress);
-                        break;
-                    case "ZoomBlur":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        break;
-                    case "ZoomBlurUp":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        y -= (int)(canvasHeight * invertProgress);
-                        break;
-                    case "ZoomBlurDown":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        y += (int)(canvasHeight * invertProgress);
-                        break;
-                    case "ZoomBlurLeft":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        x -= (int)(canvasWidth * invertProgress);
-                        break;
-                    case "ZoomBlurRight":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        x += (int)(canvasWidth * invertProgress);
-                        break;
+                    g.DrawRectangle(pen, drawX, drawY, drawW, drawH);
                 }
-            }
-
-            // --- OUT ANIMATION ---
-            double outDur = item.OutEffect?.Duration ?? 0;
-            if (remainingTime >= 0 && remainingTime < outDur && outDur > 0 && item.OutEffect != null)
-            {
-                float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(remainingTime / outDur)));
-                float invertProgress = 1.0f - progress;
-
-                switch (item.OutEffect.Type)
-                {
-                    case "Fade":
-                        opacity *= progress;
-                        break;
-                    case "Slide":
-                        x += (int)(canvasWidth * invertProgress);
-                        break;
-                    case "Wave":
-                        y += (int)(Math.Sin(invertProgress * Math.PI * 4) * 15);
-                        break;
-                    case "Zoom":
-                        zoomFactor *= (1.0f + 0.5f * invertProgress);
-                        break;
-                    case "ZoomBlur":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        break;
-                    case "ZoomBlurUp":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        y -= (int)(canvasHeight * invertProgress);
-                        break;
-                    case "ZoomBlurDown":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        y += (int)(canvasHeight * invertProgress);
-                        break;
-                    case "ZoomBlurLeft":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        x -= (int)(canvasWidth * invertProgress);
-                        break;
-                    case "ZoomBlurRight":
-                        zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
-                        x += (int)(canvasWidth * invertProgress);
-                        break;
-                }
-            }
-
-            if (zoomFactor != 1.0f)
-            {
-                int newW = (int)(baseW * zoomFactor);
-                int newH = (int)(baseH * zoomFactor);
-                x += (baseW - newW) / 2;
-                y += (baseH - newH) / 2;
-                baseW = newW;
-                baseH = newH;
-            }
-
-            if (zoomBlurIntensity > 0)
-            {
-                int samples = 8;
-                float maxScale = 1.0f + (zoomBlurIntensity * 0.7f);
-                int centerX = x + (baseW / 2);
-                int centerY = y + (baseH / 2);
-
-                for (int i = 0; i < samples; i++)
-                {
-                    float stepProgress = (float)i / (samples - 1);
-                    float currentScale = 1.0f + (maxScale - 1.0f) * stepProgress;
-
-                    int stepW = (int)(baseW * currentScale);
-                    int stepH = (int)(baseH * currentScale);
-                    int stepX = centerX - (stepW / 2);
-                    int stepY = centerY - (stepH / 2);
-
-                    using (var attributes = new ImageAttributes())
-                    {
-                        var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity / samples)) };
-                        attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
-                        g.DrawImage(img, new Rectangle(stepX, stepY, stepW, stepH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
-                    }
-                }
-            }
-            else if (opacity < 0.99f)
-            {
-                using (var attributes = new ImageAttributes())
-                {
-                    var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity)) };
-                    attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
-                    g.DrawImage(img, new Rectangle(x, y, baseW, baseH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
-                }
-            }
-            else
-            {
-                g.DrawImage(img, x, y, baseW, baseH);
-            }
-
-            if (item == SelectedItem)
-            {
-                using (Pen selectPen = new Pen(Color.Cyan, 2) { DashStyle = DashStyle.Dash })
-                {
-                    g.DrawRectangle(selectPen, x, y, baseW, baseH);
-                }
+                g.FillRectangle(Brushes.Cyan, drawX + drawW - 6, drawY + drawH - 6, 12, 12);
             }
         }
 
         private void PreviewControl_MouseDown(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left && activeFrameItems.Count > 0)
+            if (e.Button == MouseButtons.Left)
             {
-                selectedPreviewItem = activeFrameItems.LastOrDefault();
-                if (selectedPreviewItem != null)
+                this.Focus();
+                SelectedTextLabel = null;
+
+                int canvasX = (this.Width - LastCanvasWidth) / 2;
+                int canvasY = (this.Height - LastCanvasHeight) / 2;
+
+                var activeTextItems = allFrameItems
+                    .Where(item => item.Type == MediaType.Text &&
+                                   item.TextData != null &&
+                                   currentTimePosition >= item.StartTime &&
+                                   currentTimePosition < item.StartTime + item.Duration)
+                    .OrderByDescending(item => item.TrackIndex);
+
+                foreach (var textItem in activeTextItems)
                 {
-                    isDraggingImage = true;
-                    lastMousePos = e.Location;
+                    var label = textItem.TextData;
+                    float lX = canvasX + (label.RelativeX * LastCanvasWidth);
+                    float lY = canvasY + (label.RelativeY * LastCanvasHeight);
+                    float lW = label.RelativeWidth * LastCanvasWidth;
+                    float lH = label.RelativeHeight * LastCanvasHeight;
+
+                    RectangleF handleRect = new RectangleF(lX + lW - 10, lY + lH - 10, 20, 20);
+                    RectangleF boundsRect = new RectangleF(lX, lY, lW, lH);
+
+                    if (handleRect.Contains(e.Location))
+                    {
+                        SelectedItem = textItem;
+                        SelectedTextLabel = label;
+                        isResizingText = true;
+                        lastMousePos = e.Location;
+                        TextLabelSelected?.Invoke(label);
+                        this.Invalidate();
+                        return;
+                    }
+                    else if (boundsRect.Contains(e.Location))
+                    {
+                        SelectedItem = textItem;
+                        SelectedTextLabel = label;
+                        isDraggingText = true;
+                        lastMousePos = e.Location;
+                        TextLabelSelected?.Invoke(label);
+                        this.Invalidate();
+                        return;
+                    }
+                }
+
+                TextLabelSelected?.Invoke(null);
+
+                if (activeFrameItems.Count > 0)
+                {
+                    selectedPreviewItem = activeFrameItems.LastOrDefault();
+                    if (selectedPreviewItem != null)
+                    {
+                        SelectedItem = selectedPreviewItem;
+                        isDraggingImage = true;
+                        lastMousePos = e.Location;
+                    }
                 }
             }
         }
 
         private void PreviewControl_MouseMove(object sender, MouseEventArgs e)
         {
-            if (isDraggingImage && selectedPreviewItem != null)
+            int deltaX = e.X - lastMousePos.X;
+            int deltaY = e.Y - lastMousePos.Y;
+
+            if (isResizingText && selectedTextLabel != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
-                int deltaX = e.X - lastMousePos.X;
-                int deltaY = e.Y - lastMousePos.Y;
+                float currentW = selectedTextLabel.RelativeWidth * LastCanvasWidth;
+                float currentH = selectedTextLabel.RelativeHeight * LastCanvasHeight;
 
-                selectedPreviewItem.PositionX += deltaX;
-                selectedPreviewItem.PositionY += deltaY;
+                selectedTextLabel.RelativeWidth = Math.Max(50f, currentW + deltaX) / LastCanvasWidth;
+                selectedTextLabel.RelativeHeight = Math.Max(30f, currentH + deltaY) / LastCanvasHeight;
 
+                lastMousePos = e.Location;
+                this.Invalidate();
+            }
+            else if (isDraggingText && selectedTextLabel != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
+            {
+                float currentX = selectedTextLabel.RelativeX * LastCanvasWidth;
+                float currentY = selectedTextLabel.RelativeY * LastCanvasHeight;
+
+                selectedTextLabel.RelativeX = (currentX + deltaX) / LastCanvasWidth;
+                selectedTextLabel.RelativeY = (currentY + deltaY) / LastCanvasHeight;
+
+                lastMousePos = e.Location;
+                this.Invalidate();
+            }
+            else if (isDraggingImage && selectedPreviewItem != null)
+            {
+                selectedPreviewItem.PositionX += deltaX * (1080f / LastCanvasWidth);
+                selectedPreviewItem.PositionY += deltaY * (1920f / LastCanvasHeight);
                 lastMousePos = e.Location;
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
@@ -306,16 +311,17 @@ namespace VideoEditor.Controls
         private void PreviewControl_MouseUp(object sender, MouseEventArgs e)
         {
             isDraggingImage = false;
+            isDraggingText = false;
+            isResizingText = false;
         }
 
         private void PreviewControl_MouseWheel(object sender, MouseEventArgs e)
         {
             var topItem = activeFrameItems.LastOrDefault();
-            if (topItem != null)
+            if (topItem != null && selectedTextLabel == null)
             {
                 float zoomDelta = e.Delta > 0 ? 1.05f : 0.95f;
                 topItem.Scale = Math.Clamp(topItem.Scale * zoomDelta, 0.1f, 5.0f);
-
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
