@@ -14,8 +14,8 @@ namespace VideoEditor.Models
 
     public class TransitionEffect
     {
-        public string Type { get; set; } = "None"; // "None", "Fade", "Slide", "Wave", "Zoom"
-        public double Duration { get; set; } = 0.5; // Duration in seconds
+        public string Type { get; set; } = "None";
+        public double Duration { get; set; } = 0.5;
     }
 
     public class MediaItem
@@ -23,22 +23,24 @@ namespace VideoEditor.Models
         public string Id { get; set; } = Guid.NewGuid().ToString();
         public string FilePath { get; set; }
         public MediaType Type { get; set; }
-        public double Duration { get; set; } = 3.0; // Duration in seconds
-        public double StartTime { get; set; } = 0.0; // Timeline offset in seconds
-        public int TrackIndex { get; set; } = 0;     // 0 = Image Track, 1 = Audio Track
-                                    
+        public double Duration { get; set; } = 3.0;
+        public double StartTime { get; set; } = 0.0;
+        public int TrackIndex { get; set; } = 0;
+
         public double OriginalDuration { get; set; } = 0;
         public double SourceOffset { get; set; } = 0;
 
-        // In (Entrance) and Out (Exit) animations
+        // Waveform Cache Data
+        public float[] AudioPeaks { get; set; }
+
         public TransitionEffect InEffect { get; set; } = new TransitionEffect { Type = "Fade", Duration = 0.5 };
         public TransitionEffect OutEffect { get; set; } = new TransitionEffect { Type = "None", Duration = 0.5 };
 
         public List<TextLabel> TextLabels { get; set; } = new List<TextLabel>();
 
-        public float Scale { get; set; } = 1.0f; // Scale multiplier (1.0 = 100%)
-        public float PositionX { get; set; } = 0.0f; // Offset X from center
-        public float PositionY { get; set; } = 0.0f; // Offset Y from center
+        public float Scale { get; set; } = 1.0f;
+        public float PositionX { get; set; } = 0.0f;
+        public float PositionY { get; set; } = 0.0f;
     }
 
     public class TextLabel
@@ -72,6 +74,7 @@ namespace VideoEditor.Models
         public string ProjectName { get; set; } = "Untitled Project";
         public DateTime CreatedDate { get; set; } = DateTime.Now;
     }
+
     public enum EffectType
     {
         Blur
@@ -82,7 +85,7 @@ namespace VideoEditor.Models
         public string Id { get; set; } = Guid.NewGuid().ToString();
         public EffectType Type { get; set; } = EffectType.Blur;
         public double StartTime { get; set; }
-        public double Duration { get; set; } = 3.0; // Default 3 seconds
-        public float Intensity { get; set; } = 10.0f; // Blur strength
+        public double Duration { get; set; } = 3.0;
+        public float Intensity { get; set; } = 10.0f;
     }
 }

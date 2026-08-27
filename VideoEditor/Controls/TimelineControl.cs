@@ -78,12 +78,12 @@ namespace VideoEditor.Controls
         {
             var imageItems = mediaItems.Where(x => x.Type == MediaType.Image);
             int maxTrack = imageItems.Any() ? imageItems.Max(x => x.TrackIndex) : 0;
-            return Math.Max(maxTrack + 1, 3);
+            return Math.Max(maxTrack + 1, 2);
         }
 
         private int GetTotalContentHeight()
         {
-            int totalTracks = GetMaxImageTrackIndex() + 1; // Image rows + 1 Audio Row
+            int totalTracks = GetMaxImageTrackIndex() + 1;
             return headerHeight + (totalTracks * (trackHeight + trackMargin)) + 20;
         }
 
@@ -102,7 +102,6 @@ namespace VideoEditor.Controls
 
         private void UpdateScrollBars()
         {
-            // Horizontal Scroll
             double totalDuration = GetTotalDuration();
             int totalWidth = (int)(totalDuration * pixelsPerSecond) + 300;
             int maxScrollX = Math.Max(0, totalWidth - this.Width);
@@ -112,7 +111,6 @@ namespace VideoEditor.Controls
             scrollX = Math.Clamp(scrollX, 0, maxScrollX);
             hScrollBar.Value = scrollX;
 
-            // Vertical Scroll (Only show when overflowed)
             int totalHeight = GetTotalContentHeight();
             int visibleHeight = this.Height - hScrollBar.Height;
 
@@ -167,16 +165,49 @@ namespace VideoEditor.Controls
                 var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
                 if (rect.Bottom < headerHeight || rect.Top > this.Height || rect.Right < 0 || rect.Left > this.Width) continue;
 
-                var color = item.Type == MediaType.Image ? Color.SteelBlue : Color.MediumPurple;
+                var color = item.Type == MediaType.Image ? Color.SteelBlue : Color.FromArgb(30, 70, 70);
                 if (item == SelectedItem) color = Color.Crimson;
 
+                // Clip Container
                 g.FillRectangle(new SolidBrush(color), rect);
-                g.DrawRectangle(item == SelectedItem ? new Pen(Color.Yellow, 2) : Pens.White, rect);
-                g.DrawString($"{Path.GetFileName(item.FilePath)} ({item.Duration:F1}s)", this.Font, Brushes.White, x + 5, y + 2);
+
+                // Render Audio Waveform inside OnPaint loop
+                if (item.Type == MediaType.Audio && item.AudioPeaks != null && item.AudioPeaks.Length > 0)
+                {
+                    using (Pen wavePen = new Pen(Color.FromArgb(100, 255, 220), 1))
+                    {
+                        int centerY = rect.Y + (rect.Height / 2);
+                        int peakCount = item.AudioPeaks.Length;
+
+                        // Total duration of the source audio file
+                        double fullAudioDur = item.OriginalDuration > 0 ? item.OriginalDuration : item.Duration;
+                        if (fullAudioDur <= 0) fullAudioDur = item.Duration;
+
+                        for (int px = 2; px < rect.Width - 2; px++)
+                        {
+                            // Calculate exact time position in the source audio file for this pixel
+                            double localTime = ((double)px / rect.Width) * item.Duration;
+                            double sourceFileTime = item.SourceOffset + localTime;
+
+                            // Map source file time to the correct index in the peak array
+                            double fileProgress = sourceFileTime / fullAudioDur;
+                            int sampleIdx = (int)(fileProgress * peakCount);
+
+                            if (sampleIdx >= 0 && sampleIdx < peakCount)
+                            {
+                                float peak = item.AudioPeaks[sampleIdx];
+                                float scaledPeak = (float)Math.Sqrt(peak);
+                                int amplitude = Math.Max(2, (int)(scaledPeak * (rect.Height / 2.3f)));
+
+                                g.DrawLine(wavePen, rect.X + px, centerY - amplitude, rect.X + px, centerY + amplitude);
+                            }
+                        }
+                    }
+                }
             }
 
-            // 3. Pinned Time Header
-            g.FillRectangle(new SolidBrush(Color.FromArgb(35, 35, 35)), 0, 0, this.Width, headerHeight);
+                // 3. Pinned Time Header
+                g.FillRectangle(new SolidBrush(Color.FromArgb(35, 35, 35)), 0, 0, this.Width, headerHeight);
             double visibleDuration = (this.Width + scrollX) / pixelsPerSecond;
             int stepSeconds = pixelsPerSecond < 20 ? 10 : (pixelsPerSecond < 50 ? 2 : 1);
 
