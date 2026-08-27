@@ -633,7 +633,7 @@ namespace VideoEditor
 
             cb.Items.AddRange(new object[] {
                 "None", "Fade", "Slide", "Wave", "Zoom", "ZoomBlur",
-                "ZoomBlurUp", "ZoomBlurDown", "ZoomBlurLeft", "ZoomBlurRight"
+                "ZoomBlurUp", "ZoomBlurDown", "ZoomBlurLeft", "ZoomBlurRight", "DynamicZoomBlur"
             });
 
             cb.SelectedIndex = 0;

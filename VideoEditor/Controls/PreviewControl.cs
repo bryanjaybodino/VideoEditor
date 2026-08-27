@@ -152,8 +152,7 @@ namespace VideoEditor.Controls
                 {
                     if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
                     {
-                        VideoRenderHelper.DrawImageItem(g, img, item, canvasX, canvasY, canvasWidth, canvasHeight);
-
+                        VideoRenderHelper.DrawImageItem(g, img, item, currentTimePosition, canvasX, canvasY, canvasWidth, canvasHeight);
                         // Highlight selected image with a dashed outline
                         if (item == SelectedItem)
                         {

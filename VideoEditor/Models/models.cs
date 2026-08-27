@@ -13,7 +13,7 @@ namespace VideoEditor.Models
     public class TransitionEffect
     {
         public string Type { get; set; } = "None";
-        public double Duration { get; set; } = 1.0;
+        public double Duration { get; set; } = 0.5;
     }
 
     public class TextLabel
@@ -59,8 +59,34 @@ namespace VideoEditor.Models
         public int TrackIndex { get; set; } = 0;
 
         public float[] AudioPeaks { get; set; }
-        public TransitionEffect InEffect { get; set; }
-        public TransitionEffect OutEffect { get; set; }
+
+        public TransitionEffect InEffect { get; set; } = new TransitionEffect();
+        public TransitionEffect OutEffect { get; set; } = new TransitionEffect();
+
+        // String-based direct accessors
+        public string InEffectType
+        {
+            get => InEffect?.Type ?? "None";
+            set { if (InEffect == null) InEffect = new TransitionEffect(); InEffect.Type = value; }
+        }
+
+        public double InEffectDuration
+        {
+            get => InEffect?.Duration ?? 0.5;
+            set { if (InEffect == null) InEffect = new TransitionEffect(); InEffect.Duration = value; }
+        }
+
+        public string OutEffectType
+        {
+            get => OutEffect?.Type ?? "None";
+            set { if (OutEffect == null) OutEffect = new TransitionEffect(); OutEffect.Type = value; }
+        }
+
+        public double OutEffectDuration
+        {
+            get => OutEffect?.Duration ?? 0.5;
+            set { if (OutEffect == null) OutEffect = new TransitionEffect(); OutEffect.Duration = value; }
+        }
 
         public List<TextLabel> TextLabels { get; set; } = new List<TextLabel>();
         public TextLabel TextData { get; set; }
