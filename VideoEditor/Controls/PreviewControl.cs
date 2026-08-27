@@ -92,12 +92,12 @@ namespace VideoEditor.Controls
             currentTimePosition = timePosition;
             allFrameItems = items ?? new List<MediaItem>();
 
-            // Sorted Ascending to match VideoRenderHelper layer order
+            // Sorted Descending: Row 1 (TrackIndex 0) will be LAST in list = TOP layer visually
             activeFrameItems = allFrameItems
                 .Where(item => item.Type == MediaType.Image &&
                                timePosition >= item.StartTime &&
                                timePosition < item.StartTime + item.Duration)
-                .OrderBy(item => item.TrackIndex)
+                .OrderByDescending(item => item.TrackIndex)
                 .ToList();
 
             foreach (var item in activeFrameItems)
@@ -147,11 +147,14 @@ namespace VideoEditor.Controls
 
             if (activeFrameItems.Count > 0 || activeTextItems.Count > 0)
             {
+                // Render Images
                 foreach (var item in activeFrameItems)
                 {
                     if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
                     {
                         VideoRenderHelper.DrawImageItem(g, img, item, canvasX, canvasY, canvasWidth, canvasHeight);
+
+                        // Highlight selected image with a dashed outline
                         if (item == SelectedItem)
                         {
                             DrawImageSelectionHighlight(g, item, canvasX, canvasY, canvasWidth, canvasHeight);
@@ -191,6 +194,27 @@ namespace VideoEditor.Controls
             g.DrawRectangle(Pens.Gray, canvasX, canvasY, canvasWidth, canvasHeight);
         }
 
+        private void DrawImageSelectionHighlight(Graphics g, MediaItem item, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
+        {
+            if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
+            {
+                float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * item.Scale;
+                int baseW = (int)(img.Width * scale);
+                int baseH = (int)(img.Height * scale);
+
+                float posX = item.PositionX * ((float)canvasWidth / 1080f);
+                float posY = item.PositionY * ((float)canvasHeight / 1920f);
+
+                int originX = canvasX + (canvasWidth - baseW) / 2 + (int)posX;
+                int originY = canvasY + (canvasHeight - baseH) / 2 + (int)posY;
+
+                using (var pen = new Pen(Color.Cyan, 2f) { DashStyle = DashStyle.Dash })
+                {
+                    g.DrawRectangle(pen, originX, originY, baseW, baseH);
+                }
+            }
+        }
+
         private void DrawTextLabelWithSelection(Graphics g, TextLabel label, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
         {
             VideoRenderHelper.DrawTextLabel(g, label, canvasX, canvasY, canvasWidth, canvasHeight);
@@ -209,27 +233,38 @@ namespace VideoEditor.Controls
                 g.FillRectangle(Brushes.Cyan, drawX + drawW - 6, drawY + drawH - 6, 12, 12);
             }
         }
-        private void DrawImageSelectionHighlight(Graphics g, MediaItem item, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
+
+        // --- HIT-TESTING HELPER METHOD ---
+        private MediaItem GetImageItemAtPoint(Point point, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
         {
-            if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
+            // Iterate in visual order from top (Row 1) to bottom
+            var visualTopToBottom = activeFrameItems.OrderBy(item => item.TrackIndex).ToList();
+
+            foreach (var item in visualTopToBottom)
             {
-                float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * item.Scale;
-                int baseW = (int)(img.Width * scale);
-                int baseH = (int)(img.Height * scale);
-
-                float posX = item.PositionX * ((float)canvasWidth / 1080f);
-                float posY = item.PositionY * ((float)canvasHeight / 1920f);
-
-                int originX = canvasX + (canvasWidth - baseW) / 2 + (int)posX;
-                int originY = canvasY + (canvasHeight - baseH) / 2 + (int)posY;
-
-                // Draw broken / dashed line border around the active image boundaries
-                using (var pen = new Pen(Color.Cyan, 2f) { DashStyle = DashStyle.Dash })
+                if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
                 {
-                    g.DrawRectangle(pen, originX, originY, baseW, baseH);
+                    float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * item.Scale;
+                    int baseW = (int)(img.Width * scale);
+                    int baseH = (int)(img.Height * scale);
+
+                    float posX = item.PositionX * ((float)canvasWidth / 1080f);
+                    float posY = item.PositionY * ((float)canvasHeight / 1920f);
+
+                    int originX = canvasX + (canvasWidth - baseW) / 2 + (int)posX;
+                    int originY = canvasY + (canvasHeight - baseH) / 2 + (int)posY;
+
+                    RectangleF imageBounds = new RectangleF(originX, originY, baseW, baseH);
+
+                    if (imageBounds.Contains(point))
+                    {
+                        return item;
+                    }
                 }
             }
+            return null;
         }
+
         private void PreviewControl_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
@@ -284,12 +319,16 @@ namespace VideoEditor.Controls
 
                 if (activeFrameItems.Count > 0)
                 {
-                    selectedPreviewItem = activeFrameItems.LastOrDefault();
-                    if (selectedPreviewItem != null)
+                    // Call GetImageItemAtPoint to select the exact visual image clicked
+                    var clickedImage = GetImageItemAtPoint(e.Location, canvasX, canvasY, LastCanvasWidth, LastCanvasHeight);
+
+                    if (clickedImage != null)
                     {
-                        SelectedItem = selectedPreviewItem;
+                        selectedPreviewItem = clickedImage;
+                        SelectedItem = clickedImage;
                         isDraggingImage = true;
                         lastMousePos = e.Location;
+                        this.Invalidate();
                     }
                 }
             }
@@ -341,7 +380,7 @@ namespace VideoEditor.Controls
 
         private void PreviewControl_MouseWheel(object sender, MouseEventArgs e)
         {
-            var topItem = activeFrameItems.LastOrDefault();
+            var topItem = activeFrameItems.OrderBy(x => x.TrackIndex).FirstOrDefault();
             if (topItem != null && selectedTextLabel == null)
             {
                 float zoomDelta = e.Delta > 0 ? 1.05f : 0.95f;

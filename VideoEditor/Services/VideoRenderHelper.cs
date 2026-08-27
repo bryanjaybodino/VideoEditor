@@ -27,7 +27,7 @@ namespace VideoEditor.Services
                     .Where(item => item.Type == MediaType.Image &&
                                    currentTime >= item.StartTime &&
                                    currentTime < item.StartTime + item.Duration)
-                    .OrderBy(item => item.TrackIndex)
+                    .OrderByDescending(item => item.TrackIndex) // <-- Changed here
                     .ToList();
 
                 foreach (var item in activeImages)
