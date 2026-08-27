@@ -76,11 +76,12 @@ namespace VideoEditor.Controls
 
         private int GetMaxVisualTrackIndex()
         {
-            var visualItems = mediaItems.Where(x => x.Type == MediaType.Image || x.Type == MediaType.Text);
+            var visualItems = mediaItems.Where(x => x.Type == MediaType.Image || x.Type == MediaType.Text).ToList();
             int maxTrack = visualItems.Any() ? visualItems.Max(x => x.TrackIndex) : 0;
-            return Math.Max(maxTrack + 1, 2);
-        }
 
+            // Dynamically ensures there is always at least 1 extra empty row visible to allow dragging clips down
+            return maxTrack + 2;
+        }
         private int GetTotalContentHeight()
         {
             int totalTracks = GetMaxVisualTrackIndex() + 1;
@@ -96,8 +97,12 @@ namespace VideoEditor.Controls
         private int GetTrackIndexFromY(int y, MediaType type)
         {
             if (type == MediaType.Audio) return 0;
+
             int actualY = y + scrollY - headerHeight - trackMargin;
-            return Math.Max(0, actualY / (trackHeight + trackMargin));
+            int calculatedTrack = actualY / (trackHeight + trackMargin);
+
+            // Allow clips to create new rows dynamically when dropped below current tracks
+            return Math.Max(0, calculatedTrack);
         }
 
         private void UpdateScrollBars()
@@ -173,6 +178,27 @@ namespace VideoEditor.Controls
 
                 // Clip Container
                 g.FillRectangle(new SolidBrush(color), rect);
+
+                // --- NEW: Draw selection highlight border around the timeline clip ---
+                if (item == SelectedItem)
+                {
+                    using (var selectPen = new Pen(Color.Yellow, 2))
+                    {
+                        g.DrawRectangle(selectPen, rect);
+                    }
+                }
+
+                // --- NEW: Draw Image File Name Label inside image clip rectangle ---
+                if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath))
+                {
+                    string fileName = System.IO.Path.GetFileName(item.FilePath);
+                    using (var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                    using (var font = new Font(this.Font.FontFamily, 8.5f, FontStyle.Regular))
+                    {
+                        var textRect = new Rectangle(rect.X + 4, rect.Y + 4, rect.Width - 8, rect.Height - 8);
+                        g.DrawString(fileName, font, Brushes.White, textRect, format);
+                    }
+                }
 
                 if (item.Type == MediaType.Text && item.TextData != null)
                 {
@@ -311,13 +337,17 @@ namespace VideoEditor.Controls
 
                 if (activeClip.Type == MediaType.Image || activeClip.Type == MediaType.Text)
                 {
-                    activeClip.TrackIndex = GetTrackIndexFromY(e.Y, activeClip.Type);
+                    int newTrack = GetTrackIndexFromY(e.Y, activeClip.Type);
+                    if (activeClip.TrackIndex != newTrack)
+                    {
+                        activeClip.TrackIndex = newTrack;
+                        UpdateScrollBars(); // Recalculate vertical scrollbar height for new rows
+                    }
                 }
 
                 this.Invalidate();
             }
         }
-
         private void Timeline_MouseUp(object sender, MouseEventArgs e)
         {
             isDraggingPlayhead = false;

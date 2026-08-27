@@ -152,6 +152,10 @@ namespace VideoEditor.Controls
                     if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
                     {
                         VideoRenderHelper.DrawImageItem(g, img, item, canvasX, canvasY, canvasWidth, canvasHeight);
+                        if (item == SelectedItem)
+                        {
+                            DrawImageSelectionHighlight(g, item, canvasX, canvasY, canvasWidth, canvasHeight);
+                        }
                     }
                 }
 
@@ -205,7 +209,27 @@ namespace VideoEditor.Controls
                 g.FillRectangle(Brushes.Cyan, drawX + drawW - 6, drawY + drawH - 6, 12, 12);
             }
         }
+        private void DrawImageSelectionHighlight(Graphics g, MediaItem item, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
+        {
+            if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
+            {
+                float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * item.Scale;
+                int baseW = (int)(img.Width * scale);
+                int baseH = (int)(img.Height * scale);
 
+                float posX = item.PositionX * ((float)canvasWidth / 1080f);
+                float posY = item.PositionY * ((float)canvasHeight / 1920f);
+
+                int originX = canvasX + (canvasWidth - baseW) / 2 + (int)posX;
+                int originY = canvasY + (canvasHeight - baseH) / 2 + (int)posY;
+
+                // Draw broken / dashed line border around the active image boundaries
+                using (var pen = new Pen(Color.Cyan, 2f) { DashStyle = DashStyle.Dash })
+                {
+                    g.DrawRectangle(pen, originX, originY, baseW, baseH);
+                }
+            }
+        }
         private void PreviewControl_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
