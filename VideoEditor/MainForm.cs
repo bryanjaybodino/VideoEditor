@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -538,6 +539,7 @@ namespace VideoEditor
 
             toolbar.Controls.Add(CreateStyledButton("🗑 Delete Selected", () => DeleteSelectedMedia()));
 
+            // Update inside CreateToolbar() in MainForm.cs
             toolbar.Controls.Add(CreateStyledButton("Export Video", async () =>
             {
                 PausePlayback();
@@ -546,23 +548,244 @@ namespace VideoEditor
                     if (sfd.ShowDialog() == DialogResult.OK)
                     {
                         this.Enabled = false;
+                        this.UseWaitCursor = true;
+
                         try
                         {
-                            await exportService.ExportToVideo(mediaItems, sfd.FileName);
-                            MessageBox.Show("Video exported successfully!");
+                            // Pass RenderPreviewAtTime delegate directly into export service
+                            await exportService.ExportToVideo(mediaItems, sfd.FileName, (time, g) =>
+                            {
+                                // Call the exact same method that paints your live preview control
+                                RenderPreviewAtTime(time, g, new Size(1080, 1920));
+                            });
+
+                            this.Invoke((MethodInvoker)delegate
+                            {
+                                MessageBox.Show(this, "Video exported successfully!", "Export Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            });
                         }
                         catch (Exception ex)
                         {
-                            MessageBox.Show(ex.Message, "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            this.Invoke((MethodInvoker)delegate
+                            {
+                                MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            });
                         }
-                        finally { this.Enabled = true; }
+                        finally
+                        {
+                            this.Invoke((MethodInvoker)delegate
+                            {
+                                this.Enabled = true;
+                                this.UseWaitCursor = false;
+                            });
+                        }
                     }
                 }
             }));
-
             return toolbar;
         }
+        public void RenderPreviewAtTime(double timePosition, Graphics g, Size canvasSize)
+        {
+            g.Clear(Color.Black);
 
+            // Find active image item using exact timeline StartTime positioning
+            var activeItem = mediaItems.FirstOrDefault(item =>
+                item.Type == MediaType.Image &&
+                timePosition >= item.StartTime &&
+                timePosition < item.StartTime + item.Duration);
+
+            if (activeItem == null || !File.Exists(activeItem.FilePath))
+                return;
+
+            using (var img = Image.FromFile(activeItem.FilePath))
+            {
+                // 1. Calculate 9:16 aspect ratio box based on target canvas size
+                float targetAspect = 9.0f / 16.0f;
+                int canvasWidth = canvasSize.Width;
+                int canvasHeight = canvasSize.Height;
+
+                if ((float)canvasWidth / canvasHeight > targetAspect)
+                {
+                    canvasWidth = (int)(canvasHeight * targetAspect);
+                }
+                else
+                {
+                    canvasHeight = (int)(canvasWidth / targetAspect);
+                }
+
+                int canvasX = (canvasSize.Width - canvasWidth) / 2;
+                int canvasY = (canvasSize.Height - canvasHeight) / 2;
+
+                // Fill 9:16 area maintaining image aspect ratio
+                float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height);
+                int baseW = (int)(img.Width * scale);
+                int baseH = (int)(img.Height * scale);
+                int originX = canvasX + (canvasWidth - baseW) / 2;
+                int originY = canvasY + (canvasHeight - baseH) / 2;
+
+                int x = originX;
+                int y = originY;
+
+                // Clip strictly to destination canvas box
+                g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
+
+                double localTime = timePosition - activeItem.StartTime;
+                double remainingTime = activeItem.Duration - localTime;
+
+                float opacity = 1.0f;
+                float zoomFactor = 1.0f;
+                float zoomBlurIntensity = 0.0f;
+
+                // --- IN ANIMATION ---
+                double inDur = activeItem.InEffect?.Duration ?? 0;
+                if (localTime >= 0 && localTime < inDur && inDur > 0 && activeItem.InEffect != null)
+                {
+                    float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(localTime / inDur)));
+                    float invertProgress = 1.0f - progress;
+
+                    switch (activeItem.InEffect.Type)
+                    {
+                        case "Fade":
+                            opacity *= progress;
+                            break;
+                        case "Slide":
+                            x = (int)(originX - canvasWidth + (canvasWidth * progress));
+                            break;
+                        case "Wave":
+                            y += (int)(Math.Sin(progress * Math.PI * 4) * 15);
+                            break;
+                        case "Zoom":
+                            zoomFactor *= (0.5f + 0.5f * progress);
+                            break;
+                        case "ZoomBlur":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            break;
+                        case "ZoomBlurUp":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            y -= (int)(canvasHeight * invertProgress);
+                            break;
+                        case "ZoomBlurDown":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            y += (int)(canvasHeight * invertProgress);
+                            break;
+                        case "ZoomBlurLeft":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            x -= (int)(canvasWidth * invertProgress);
+                            break;
+                        case "ZoomBlurRight":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            x += (int)(canvasWidth * invertProgress);
+                            break;
+                    }
+                }
+
+                // --- OUT ANIMATION ---
+                double outDur = activeItem.OutEffect?.Duration ?? 0;
+                if (remainingTime >= 0 && remainingTime < outDur && outDur > 0 && activeItem.OutEffect != null)
+                {
+                    float progress = Math.Max(0.0f, Math.Min(1.0f, (float)(remainingTime / outDur)));
+                    float invertProgress = 1.0f - progress;
+
+                    switch (activeItem.OutEffect.Type)
+                    {
+                        case "Fade":
+                            opacity *= progress;
+                            break;
+                        case "Slide":
+                            x += (int)(canvasWidth * invertProgress);
+                            break;
+                        case "Wave":
+                            y += (int)(Math.Sin(invertProgress * Math.PI * 4) * 15);
+                            break;
+                        case "Zoom":
+                            zoomFactor *= (1.0f + 0.5f * invertProgress);
+                            break;
+                        case "ZoomBlur":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            break;
+                        case "ZoomBlurUp":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            y -= (int)(canvasHeight * invertProgress);
+                            break;
+                        case "ZoomBlurDown":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            y += (int)(canvasHeight * invertProgress);
+                            break;
+                        case "ZoomBlurLeft":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            x -= (int)(canvasWidth * invertProgress);
+                            break;
+                        case "ZoomBlurRight":
+                            zoomBlurIntensity = Math.Max(zoomBlurIntensity, invertProgress);
+                            x += (int)(canvasWidth * invertProgress);
+                            break;
+                    }
+                }
+
+                // Apply Zoom Scaling
+                if (zoomFactor != 1.0f)
+                {
+                    int newW = (int)(baseW * zoomFactor);
+                    int newH = (int)(baseH * zoomFactor);
+                    x += (baseW - newW) / 2;
+                    y += (baseH - newH) / 2;
+                    baseW = newW;
+                    baseH = newH;
+                }
+
+                // Render Base Image / Motion Effects
+                if (zoomBlurIntensity > 0)
+                {
+                    int samples = 8;
+                    float maxScale = 1.0f + (zoomBlurIntensity * 0.7f);
+                    int centerX = x + (baseW / 2);
+                    int centerY = y + (baseH / 2);
+
+                    for (int i = 0; i < samples; i++)
+                    {
+                        float stepProgress = (float)i / (samples - 1);
+                        float currentScale = 1.0f + (maxScale - 1.0f) * stepProgress;
+
+                        int stepW = (int)(baseW * currentScale);
+                        int stepH = (int)(baseH * currentScale);
+                        int stepX = centerX - (stepW / 2);
+                        int stepY = centerY - (stepH / 2);
+
+                        using (var attributes = new ImageAttributes())
+                        {
+                            var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity / samples)) };
+                            attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+                            g.DrawImage(img, new Rectangle(stepX, stepY, stepW, stepH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
+                        }
+                    }
+                }
+                else if (opacity < 0.99f)
+                {
+                    using (var attributes = new ImageAttributes())
+                    {
+                        var matrix = new ColorMatrix { Matrix33 = Math.Max(0.0f, Math.Min(1.0f, opacity)) };
+                        attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+                        g.DrawImage(img, new Rectangle(x, y, baseW, baseH), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes);
+                    }
+                }
+                else
+                {
+                    g.DrawImage(img, x, y, baseW, baseH);
+                }
+
+                // Render Text Overlays / Captions
+                foreach (var label in activeItem.TextLabels)
+                {
+                    using (var font = new Font(label.FontFamily, label.FontSize, label.IsBold ? FontStyle.Bold : FontStyle.Regular))
+                    using (var brush = new SolidBrush(label.Color))
+                    {
+                        g.DrawString(label.Content, font, brush, label.X, label.Y);
+                    }
+                }
+
+                g.ResetClip();
+            }
+        }
         private void ImportFiles()
         {
             using (var ofd = new OpenFileDialog

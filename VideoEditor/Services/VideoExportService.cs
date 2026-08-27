@@ -2,10 +2,10 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using VideoEditor.Models;
 
@@ -13,105 +13,106 @@ namespace VideoEditor.Services
 {
     public class VideoExportService
     {
-        private string ffmpegPath = "ffmpeg";
+        private const int OutputWidth = 1080;
+        private const int OutputHeight = 1920;
+        private const int TargetFps = 30;
 
-        // Locked to 9:16 Vertical Mobile Aspect Ratio
-        private const int TargetWidth = 1080;
-        private const int TargetHeight = 1920;
-        private const int FrameRate = 30;
-
-        public async Task ExportToVideo(List<MediaItem> mediaItems, string outputPath)
+        public async Task ExportToVideo(List<MediaItem> items, string outputPath, Action<double, Graphics> renderPreviewFrame)
         {
-            if (mediaItems == null || mediaItems.Count == 0)
-                throw new InvalidOperationException("No media items to export");
+            var imageItems = items.Where(x => x.Type == MediaType.Image).ToList();
+            var audioItem = items.FirstOrDefault(x => x.Type == MediaType.Audio);
 
-            double totalDuration = mediaItems.Max(x => x.StartTime + x.Duration);
-            var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
+            if (imageItems.Count == 0)
+                throw new Exception("No image clips found to export.");
 
-            var ffmpegArgs = $"-y -f rawvideo -pixel_format bgr24 -video_size {TargetWidth}x{TargetHeight} -framerate {FrameRate} -i - ";
+            double totalDuration = items.Max(x => x.StartTime + x.Duration);
+            int totalFrames = (int)(totalDuration * TargetFps);
 
+            string tempOutputFile = Path.Combine(Path.GetTempPath(), $"export_{Guid.NewGuid():N}.mp4");
+
+            // Build audio arguments if audio exists
+            string audioArgs = "";
             if (audioItem != null && File.Exists(audioItem.FilePath))
             {
-                ffmpegArgs += $"-itsoffset {audioItem.StartTime.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{audioItem.FilePath}\" -c:a aac ";
+                double audioDuration = Math.Min(audioItem.Duration, totalDuration - audioItem.StartTime);
+                audioArgs = $"-ss {audioItem.StartTime.ToString(System.Globalization.CultureInfo.InvariantCulture)} -t {audioDuration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{audioItem.FilePath}\" -map 0:v -map 1:a -c:a aac -b:a 192k";
+            }
+            else
+            {
+                audioArgs = "-map 0:v";
             }
 
-            ffmpegArgs += $"-t {totalDuration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -c:v libx264 -pix_fmt yuv420p \"{outputPath}\"";
-
-            var processInfo = new ProcessStartInfo
-            {
-                FileName = ffmpegPath,
-                Arguments = ffmpegArgs,
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
+            // Pipe raw video frames directly into FFmpeg
+            string arguments = $"-y -f rawvideo -vcodec rawvideo -s {OutputWidth}x{OutputHeight} -pix_fmt bgr24 -r {TargetFps} -i - {audioArgs} -t {totalDuration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -c:v libx264 -preset ultrafast -pix_fmt yuv420p \"{tempOutputFile}\"";
 
             await Task.Run(() =>
             {
-                using (var process = Process.Start(processInfo))
+                var psi = new ProcessStartInfo
                 {
-                    if (process == null) throw new InvalidOperationException("Failed to start FFmpeg.");
+                    FileName = "ffmpeg.exe",
+                    Arguments = arguments,
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
 
-                    using (var stream = process.StandardInput.BaseStream)
+                using (var process = Process.Start(psi))
+                {
+                    using (Stream ffmpegIn = process.StandardInput.BaseStream)
+                    using (Bitmap frameBuffer = new Bitmap(OutputWidth, OutputHeight, PixelFormat.Format24bppRgb))
+                    using (Graphics g = Graphics.FromImage(frameBuffer))
                     {
-                        int totalFrames = (int)(totalDuration * FrameRate);
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.SmoothingMode = SmoothingMode.HighQuality;
+                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
+                        // Render frame by frame matching the exact preview math
                         for (int frame = 0; frame < totalFrames; frame++)
                         {
-                            double timePosition = frame / (double)FrameRate;
-                            RenderCompositeFrame(mediaItems, timePosition, stream);
+                            double timeInSeconds = (double)frame / TargetFps;
+
+                            // Clear canvas
+                            g.Clear(Color.Black);
+
+                            // Delegate rendering to your existing UI preview render logic
+                            renderPreviewFrame(timeInSeconds, g);
+
+                            // Write raw bitmap bytes directly into FFmpeg process stdin
+                            BitmapData bmpData = frameBuffer.LockBits(
+                                new Rectangle(0, 0, OutputWidth, OutputHeight),
+                                ImageLockMode.ReadOnly,
+                                PixelFormat.Format24bppRgb);
+
+                            try
+                            {
+                                byte[] bytes = new byte[bmpData.Stride * OutputHeight];
+                                System.Runtime.InteropServices.Marshal.Copy(bmpData.Scan0, bytes, 0, bytes.Length);
+                                ffmpegIn.Write(bytes, 0, bytes.Length);
+                            }
+                            finally
+                            {
+                                frameBuffer.UnlockBits(bmpData);
+                            }
                         }
-                        stream.Flush();
+
+                        ffmpegIn.Flush();
                     }
 
-                    string errorOutput = process.StandardError.ReadToEnd();
+                    string errorLog = process.StandardError.ReadToEnd();
                     process.WaitForExit();
 
                     if (process.ExitCode != 0)
                     {
-                        throw new InvalidOperationException($"FFmpeg export failed: {errorOutput}");
+                        throw new Exception($"FFmpeg Export Failed:\n{errorLog}");
                     }
                 }
             });
-        }
 
-        private void RenderCompositeFrame(List<MediaItem> mediaItems, double timePosition, Stream outputStream)
-        {
-            using (var bitmap = new Bitmap(TargetWidth, TargetHeight, PixelFormat.Format24bppRgb))
-            using (var g = Graphics.FromImage(bitmap))
+            if (File.Exists(tempOutputFile))
             {
-                g.Clear(Color.Black);
-
-                var activeItem = mediaItems.FirstOrDefault(item =>
-                    item.Type == MediaType.Image &&
-                    timePosition >= item.StartTime &&
-                    timePosition < item.StartTime + item.Duration);
-
-                if (activeItem != null && File.Exists(activeItem.FilePath))
-                {
-                    using (var sourceImg = Image.FromFile(activeItem.FilePath))
-                    {
-                        // Fill screen maintaining aspect ratio (Aspect Fill)
-                        float scale = Math.Max((float)TargetWidth / sourceImg.Width, (float)TargetHeight / sourceImg.Height);
-                        int w = (int)(sourceImg.Width * scale);
-                        int h = (int)(sourceImg.Height * scale);
-                        int x = (TargetWidth - w) / 2;
-                        int y = (TargetHeight - h) / 2;
-
-                        g.DrawImage(sourceImg, x, y, w, h);
-                    }
-                }
-
-                BitmapData bmpData = bitmap.LockBits(new Rectangle(0, 0, TargetWidth, TargetHeight),
-                    ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-
-                int bytes = Math.Abs(bmpData.Stride) * TargetHeight;
-                byte[] rgbValues = new byte[bytes];
-                Marshal.Copy(bmpData.Scan0, rgbValues, 0, bytes);
-                bitmap.UnlockBits(bmpData);
-
-                outputStream.Write(rgbValues, 0, bytes);
+                if (File.Exists(outputPath)) File.Delete(outputPath);
+                File.Move(tempOutputFile, outputPath);
             }
         }
     }
