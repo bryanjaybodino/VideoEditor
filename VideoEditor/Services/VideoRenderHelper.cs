@@ -210,32 +210,46 @@ namespace VideoEditor.Services
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.Clear(Color.Black);
 
-                var active = allItems.Where(i => currentTime >= i.StartTime && currentTime < i.StartTime + i.Duration);
+                // 1. Get all active visual items (Images AND Blurs) sorted by TrackIndex (back-to-front)
+                var activeVisualItems = allItems
+                    .Where(i => (i.Type == MediaType.Image || (i.Type == MediaType.Blur && i.BlurData != null)) &&
+                                currentTime >= i.StartTime &&
+                                currentTime < i.StartTime + i.Duration)
+                    .OrderByDescending(i => i.TrackIndex); // Higher TrackIndex = Background, Lower TrackIndex = Foreground
 
-                // 1. Render Images
-                foreach (var item in active.Where(i => i.Type == MediaType.Image).OrderByDescending(i => i.TrackIndex))
+                // 2. Render images and blurs in exact layer order
+                foreach (var item in activeVisualItems)
                 {
-                    if (File.Exists(item.FilePath))
+                    if (item.Type == MediaType.Image)
                     {
-                        using var img = Image.FromFile(item.FilePath);
-                        DrawImageItem(g, img, item, currentTime, 0, 0, canvasWidth, canvasHeight);
-                    }
+                        if (File.Exists(item.FilePath))
+                        {
+                            using var img = Image.FromFile(item.FilePath);
+                            DrawImageItem(g, img, item, currentTime, 0, 0, canvasWidth, canvasHeight);
+                        }
 
-                    if (item.TextLabels != null)
+                        if (item.TextLabels != null)
+                        {
+                            double localTime = currentTime - item.StartTime;
+                            foreach (var lbl in item.TextLabels.Where(l => localTime >= l.StartTime && localTime <= l.StartTime + l.Duration))
+                                DrawTextLabel(g, lbl, 0, 0, canvasWidth, canvasHeight);
+                        }
+                    }
+                    else if (item.Type == MediaType.Blur)
                     {
-                        double localTime = currentTime - item.StartTime;
-                        foreach (var lbl in item.TextLabels.Where(l => localTime >= l.StartTime && localTime <= l.StartTime + l.Duration))
-                            DrawTextLabel(g, lbl, 0, 0, canvasWidth, canvasHeight);
+                        // Draws blur on top of background images, but BEFORE foreground images!
+                        DrawBlurOverlay(g, item.BlurData, allItems, currentTime, 0, 0, canvasWidth, canvasHeight, item.TrackIndex);
                     }
                 }
 
-                // 2. Render Blur Overlays
-                foreach (var blurItem in active.Where(i => i.Type == MediaType.Blur && i.BlurData != null).OrderByDescending(i => i.TrackIndex))
-                {
-                    DrawBlurOverlay(g, blurItem.BlurData, allItems, currentTime, 0, 0, canvasWidth, canvasHeight, blurItem.TrackIndex);
-                }
-                // 3. Render Text Overlays
-                foreach (var textItem in active.Where(i => i.Type == MediaType.Text && i.TextData != null))
+                // 3. Render Text Overlays on top of everything
+                var activeTextItems = allItems
+                    .Where(i => i.Type == MediaType.Text &&
+                                i.TextData != null &&
+                                currentTime >= i.StartTime &&
+                                currentTime < i.StartTime + i.Duration);
+
+                foreach (var textItem in activeTextItems)
                 {
                     DrawTextLabel(g, textItem.TextData, 0, 0, canvasWidth, canvasHeight);
                 }

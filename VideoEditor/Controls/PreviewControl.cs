@@ -165,16 +165,14 @@ namespace VideoEditor.Controls
 
             g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
 
-            // Filter active blur overlays
-            var activeBlurItems = allFrameItems
-                .Where(item => item.Type == MediaType.Blur &&
-                               item.BlurData != null &&
+            // FIX 3: Combine and sort visual tracks (Image + Blur) by TrackIndex
+            var activeVisualItems = allFrameItems
+                .Where(item => (item.Type == MediaType.Image || (item.Type == MediaType.Blur && item.BlurData != null)) &&
                                currentTimePosition >= item.StartTime &&
                                currentTimePosition < item.StartTime + item.Duration)
                 .OrderByDescending(item => item.TrackIndex)
                 .ToList();
 
-            // Filter active standalone text items
             var activeTextItems = allFrameItems
                 .Where(item => item.Type == MediaType.Text &&
                                item.TextData != null &&
@@ -183,12 +181,12 @@ namespace VideoEditor.Controls
                 .OrderBy(item => item.TrackIndex)
                 .ToList();
 
-            if (activeFrameItems.Count > 0 || activeTextItems.Count > 0 || activeBlurItems.Count > 0)
+            if (activeVisualItems.Count > 0 || activeTextItems.Count > 0)
             {
-                // 1. Render Base Images
-                foreach (var item in activeFrameItems.Where(i => i.Type == MediaType.Image))
+                // Interleaved layer rendering according to track hierarchy
+                foreach (var item in activeVisualItems)
                 {
-                    if (!string.IsNullOrEmpty(item.FilePath) && imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
+                    if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath) && imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
                     {
                         VideoRenderHelper.DrawImageItem(g, img, item, currentTimePosition, canvasX, canvasY, canvasWidth, canvasHeight);
 
@@ -196,37 +194,32 @@ namespace VideoEditor.Controls
                         {
                             DrawImageSelectionHighlight(g, item, canvasX, canvasY, canvasWidth, canvasHeight);
                         }
-                    }
-                }
 
-                // 2. Render Blur Overlays
-                foreach (var blurItem in activeBlurItems)
-                {
-                    VideoRenderHelper.DrawBlurOverlay(g, blurItem.BlurData, allFrameItems, currentTimePosition, canvasX, canvasY, canvasWidth, canvasHeight, blurItem.TrackIndex);
-
-                    if (blurItem == SelectedItem)
-                    {
-                        DrawBlurSelectionHighlight(g, blurItem, canvasX, canvasY, canvasWidth, canvasHeight);
-                    }
-                }
-
-                // 3. Render Image Text Labels
-                foreach (var item in activeFrameItems.Where(i => i.Type == MediaType.Image))
-                {
-                    double localTime = currentTimePosition - item.StartTime;
-                    if (item.TextLabels != null)
-                    {
-                        foreach (var label in item.TextLabels)
+                        // Render embedded image text labels
+                        double localTime = currentTimePosition - item.StartTime;
+                        if (item.TextLabels != null)
                         {
-                            if (localTime >= label.StartTime && localTime <= label.StartTime + label.Duration)
+                            foreach (var label in item.TextLabels)
                             {
-                                DrawTextLabelWithSelection(g, label, canvasX, canvasY, canvasWidth, canvasHeight);
+                                if (localTime >= label.StartTime && localTime <= label.StartTime + label.Duration)
+                                {
+                                    DrawTextLabelWithSelection(g, label, canvasX, canvasY, canvasWidth, canvasHeight);
+                                }
                             }
+                        }
+                    }
+                    else if (item.Type == MediaType.Blur && item.BlurData != null)
+                    {
+                        VideoRenderHelper.DrawBlurOverlay(g, item.BlurData, allFrameItems, currentTimePosition, canvasX, canvasY, canvasWidth, canvasHeight, item.TrackIndex);
+
+                        if (item == SelectedItem)
+                        {
+                            DrawBlurSelectionHighlight(g, item, canvasX, canvasY, canvasWidth, canvasHeight);
                         }
                     }
                 }
 
-                // 4. Render Standalone Text Items
+                // Standalone Text Items (Topmost)
                 foreach (var textItem in activeTextItems)
                 {
                     DrawTextLabelWithSelection(g, textItem.TextData, canvasX, canvasY, canvasWidth, canvasHeight);
