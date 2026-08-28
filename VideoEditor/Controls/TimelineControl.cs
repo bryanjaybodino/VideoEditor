@@ -16,6 +16,7 @@ namespace VideoEditor.Controls
         private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubIdList);
 
         private List<MediaItem> mediaItems = new List<MediaItem>();
+        private HashSet<int> lockedTracks = new HashSet<int>(); // Tracks set to locked state
         private double currentTime = 0;
         private double pixelsPerSecond = 40;
         private double minPixelsPerSecond = 10;
@@ -171,8 +172,6 @@ namespace VideoEditor.Controls
 
             int maxVisualTracks = GetMaxVisualTrackIndex();
             int leftPanelWidth = 80; // Margin boundary for controls
-            int buttonWidth = 22;
-            int buttonHeight = 16;
 
             // 1. Full-Width Row Backgrounds
             for (int i = 0; i < maxVisualTracks; i++)
@@ -215,7 +214,7 @@ namespace VideoEditor.Controls
             foreach (var item in mediaItems)
             {
                 int y = GetTrackY(item.TrackIndex, item.Type);
-                int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX; // Added leftPanelWidth
+                int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX;
                 int width = (int)(item.Duration * pixelsPerSecond);
 
                 var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
@@ -300,7 +299,7 @@ namespace VideoEditor.Controls
                 {
                     foreach (var label in item.TextLabels)
                     {
-                        int labelX = leftPanelWidth + (int)((item.StartTime + label.StartTime) * pixelsPerSecond) - scrollX; // Added leftPanelWidth
+                        int labelX = leftPanelWidth + (int)((item.StartTime + label.StartTime) * pixelsPerSecond) - scrollX;
                         int labelWidth = (int)(label.Duration * pixelsPerSecond);
                         var textRect = new Rectangle(labelX, rect.Y + rect.Height - 18, Math.Max(labelWidth, 4), 14);
 
@@ -314,9 +313,18 @@ namespace VideoEditor.Controls
                         }
                     }
                 }
+
+                // Draw translucent lock overlay if track is locked
+                if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio)
+                {
+                    using (var lockHatch = new SolidBrush(Color.FromArgb(90, 0, 0, 0)))
+                    {
+                        g.FillRectangle(lockHatch, rect);
+                    }
+                }
             }
 
-            // Playhead Line (Offset by leftPanelWidth)
+            // Playhead Line
             int playheadX = leftPanelWidth + (int)(currentTime * pixelsPerSecond) - scrollX;
             if (playheadX >= leftPanelWidth && playheadX <= this.Width)
             {
@@ -340,20 +348,21 @@ namespace VideoEditor.Controls
 
             for (int i = 0; i <= Math.Max(GetTotalDuration() + 60, visibleDuration + 10); i += stepSeconds)
             {
-                int x = leftPanelWidth + (int)(i * pixelsPerSecond) - scrollX; // Added leftPanelWidth
+                int x = leftPanelWidth + (int)(i * pixelsPerSecond) - scrollX;
                 if (x < leftPanelWidth || x > this.Width) continue;
 
                 g.DrawLine(Pens.Gray, x, headerHeight - 8, x, headerHeight);
                 g.DrawString($"{i}s", this.Font, Brushes.Gray, x + 2, 2);
             }
 
-            // 4. Left Header Controls Panel
+            // 4. Left Header Controls Panel: Insert Up | Delete | Lock
             for (int i = 0; i < maxVisualTracks; i++)
             {
                 int trackY = GetTrackY(i, MediaType.Image);
                 if (trackY + trackHeight < headerHeight || trackY > this.Height) continue;
 
                 bool isRowSelected = (i == SelectedTrackIndex);
+                bool isTrackLocked = lockedTracks.Contains(i);
 
                 Color leftBgColor = isRowSelected ? Color.FromArgb(40, 50, 70) : Color.FromArgb(25, 25, 25);
                 using (var leftBrush = new SolidBrush(leftBgColor))
@@ -363,23 +372,44 @@ namespace VideoEditor.Controls
 
                 g.DrawLine(Pens.Gray, leftPanelWidth, trackY, leftPanelWidth, trackY + trackHeight);
 
-                Rectangle rectUp = new Rectangle(5, trackY + 4, buttonWidth, buttonHeight);
-                Rectangle rectDown = new Rectangle(5, trackY + 23, buttonWidth, buttonHeight);
+                int btnY = trackY + 12;
+                int btnW = 20;
+                int btnH = 20;
+
+                Rectangle rectUp = new Rectangle(5, btnY, btnW, btnH);
+                Rectangle rectDelete = new Rectangle(30, btnY, btnW, btnH);
+                Rectangle rectLock = new Rectangle(55, btnY, btnW, btnH);
 
                 using (var btnBrush = new SolidBrush(Color.FromArgb(50, 50, 50)))
                 {
                     g.FillRectangle(btnBrush, rectUp);
-                    g.FillRectangle(btnBrush, rectDown);
+                }
+
+                using (var deleteBtnBrush = new SolidBrush(Color.FromArgb(80, 30, 30)))
+                {
+                    g.FillRectangle(deleteBtnBrush, rectDelete);
+                }
+
+                Color lockBgColor = isTrackLocked ? Color.FromArgb(120, 80, 20) : Color.FromArgb(50, 50, 50);
+                using (var lockBtnBrush = new SolidBrush(lockBgColor))
+                {
+                    g.FillRectangle(lockBtnBrush, rectLock);
                 }
 
                 g.DrawRectangle(Pens.Gray, rectUp);
-                g.DrawRectangle(Pens.Gray, rectDown);
+                g.DrawRectangle(Pens.IndianRed, rectDelete);
+                g.DrawRectangle(isTrackLocked ? Pens.Gold : Pens.Gray, rectLock);
 
-                g.DrawString("▲", new Font(this.Font.FontFamily, 7f), Brushes.White, rectUp.X + 4, rectUp.Y + 1);
-                g.DrawString("▼", new Font(this.Font.FontFamily, 7f), Brushes.White, rectDown.X + 4, rectDown.Y + 1);
+                g.DrawString("▲", new Font(this.Font.FontFamily, 7.5f), Brushes.White, rectUp.X + 3, rectUp.Y + 2);
+                g.DrawString("✕", new Font(this.Font.FontFamily, 7.5f, FontStyle.Bold), Brushes.Tomato, rectDelete.X + 3, rectDelete.Y + 2);
 
-                Brush textBrush = isRowSelected ? Brushes.LightCyan : Brushes.DimGray;
-                g.DrawString($"Row {i + 1}", this.Font, textBrush, 32, trackY + 12);
+                // Using reliable wingdings / text symbols for GDI+ rendering
+                string lockText = isTrackLocked ? "L" : "U";
+                Brush lockTextBrush = isTrackLocked ? Brushes.Gold : Brushes.LightGray;
+                using (var lockFont = new Font("Segoe UI", 7.5f, FontStyle.Bold))
+                {
+                    g.DrawString(lockText, lockFont, lockTextBrush, rectLock.X + 5, rectLock.Y + 2);
+                }
             }
 
             // Audio Row Header
@@ -390,7 +420,7 @@ namespace VideoEditor.Controls
                     g.FillRectangle(audioHeaderBrush, 0, audioY, leftPanelWidth, trackHeight);
                 }
                 g.DrawLine(Pens.Gray, leftPanelWidth, audioY, leftPanelWidth, audioY + trackHeight);
-                g.DrawString("Audio", this.Font, Brushes.DarkTurquoise, 32, audioY + 12);
+                g.DrawString("Audio", this.Font, Brushes.DarkTurquoise, 22, audioY + 14);
             }
 
             // Top-Left Junction Box
@@ -423,27 +453,37 @@ namespace VideoEditor.Controls
             if (e.Y <= headerHeight)
             {
                 isDraggingPlayhead = true;
-                CurrentTime = (e.X + scrollX) / pixelsPerSecond;
+                CurrentTime = Math.Max(0, (e.X - leftPanelWidth + scrollX) / pixelsPerSecond);
                 return;
             }
 
             int clickedTrackIndex = GetTrackIndexFromY(e.Y, MediaType.Image);
             int trackY = GetTrackY(clickedTrackIndex, MediaType.Image);
 
-            // Check if click occurred in button area on the left (X <= 30)
-            if (e.X >= 5 && e.X <= 27)
+            // Check button clicks on the left panel
+            if (e.X < leftPanelWidth)
             {
-                Rectangle rectUp = new Rectangle(5, trackY + 4, 22, 16);
-                Rectangle rectDown = new Rectangle(5, trackY + 23, 22, 16);
+                int btnY = trackY + 12;
+                int btnW = 20;
+                int btnH = 20;
+
+                Rectangle rectUp = new Rectangle(5, btnY, btnW, btnH);
+                Rectangle rectDelete = new Rectangle(30, btnY, btnW, btnH);
+                Rectangle rectLock = new Rectangle(55, btnY, btnW, btnH);
 
                 if (rectUp.Contains(e.Location))
                 {
                     InsertTrackAbove(clickedTrackIndex);
                     return;
                 }
-                else if (rectDown.Contains(e.Location))
+                else if (rectDelete.Contains(e.Location))
                 {
-                    InsertTrackBelow(clickedTrackIndex);
+                    DeleteTrackAt(clickedTrackIndex);
+                    return;
+                }
+                else if (rectLock.Contains(e.Location))
+                {
+                    ToggleTrackLock(clickedTrackIndex);
                     return;
                 }
             }
@@ -455,22 +495,31 @@ namespace VideoEditor.Controls
             foreach (var item in mediaItems)
             {
                 int y = GetTrackY(item.TrackIndex, item.Type);
-                int x = (int)(item.StartTime * pixelsPerSecond) - scrollX;
+                int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX;
                 int width = (int)(item.Duration * pixelsPerSecond);
                 var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
 
                 if (rect.Contains(e.Location))
                 {
+                    // Ignore clicks on clips located on locked tracks
+                    if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio)
+                    {
+                        continue;
+                    }
+
                     SelectedItem = item;
                     SelectedTrackIndex = item.TrackIndex;
                     ClipSelected?.Invoke(item);
                     activeClip = item;
 
-                    if (e.X >= (x + width - EdgeMargin) && e.X <= (x + width + EdgeMargin)) isResizingClip = true;
+                    if (e.X >= (x + width - EdgeMargin) && e.X <= (x + width + EdgeMargin))
+                    {
+                        isResizingClip = true;
+                    }
                     else
                     {
                         isDraggingClip = true;
-                        clipDragOffset = ((e.X + scrollX) / pixelsPerSecond) - item.StartTime;
+                        clipDragOffset = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - item.StartTime;
                     }
                     this.Invalidate();
                     return;
@@ -478,32 +527,36 @@ namespace VideoEditor.Controls
             }
 
             ClipSelected?.Invoke(null);
-            CurrentTime = (e.X + scrollX) / pixelsPerSecond;
+            CurrentTime = Math.Max(0, (e.X - leftPanelWidth + scrollX) / pixelsPerSecond);
             this.Invalidate();
         }
 
         private void Timeline_MouseMove(object sender, MouseEventArgs e)
         {
+            int leftPanelWidth = 80;
+
             if (isDraggingPlayhead)
             {
-                CurrentTime = (e.X + scrollX) / pixelsPerSecond;
+                CurrentTime = Math.Max(0, (e.X - leftPanelWidth + scrollX) / pixelsPerSecond);
             }
             else if (isResizingClip && activeClip != null)
             {
-                double newDuration = ((e.X + scrollX) / pixelsPerSecond) - activeClip.StartTime;
+                double newDuration = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - activeClip.StartTime;
                 activeClip.Duration = Math.Max(0.5, newDuration);
                 ItemResized?.Invoke(activeClip);
                 this.Invalidate();
             }
             else if (isDraggingClip && activeClip != null)
             {
-                double newStart = ((e.X + scrollX) / pixelsPerSecond) - clipDragOffset;
+                double newStart = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - clipDragOffset;
                 activeClip.StartTime = Math.Max(0, newStart);
 
                 if (activeClip.Type == MediaType.Image || activeClip.Type == MediaType.Text || activeClip.Type == MediaType.Blur)
                 {
                     int newTrack = GetTrackIndexFromY(e.Y, activeClip.Type);
-                    if (activeClip.TrackIndex != newTrack)
+
+                    // Prevent moving clips into a locked track
+                    if (activeClip.TrackIndex != newTrack && !lockedTracks.Contains(newTrack))
                     {
                         activeClip.TrackIndex = newTrack;
                         UpdateScrollBars();
@@ -525,11 +578,13 @@ namespace VideoEditor.Controls
 
         private void Timeline_MouseWheel(object sender, MouseEventArgs e)
         {
+            int leftPanelWidth = 80;
+
             if (ModifierKeys == Keys.Control)
             {
-                double mouseTime = (e.X + scrollX) / pixelsPerSecond;
+                double mouseTime = (e.X - leftPanelWidth + scrollX) / pixelsPerSecond;
                 pixelsPerSecond = e.Delta > 0 ? Math.Min(pixelsPerSecond * 1.15, maxPixelsPerSecond) : Math.Max(pixelsPerSecond / 1.15, minPixelsPerSecond);
-                scrollX = Math.Max(0, (int)(mouseTime * pixelsPerSecond - e.X));
+                scrollX = Math.Max(0, (int)(mouseTime * pixelsPerSecond - (e.X - leftPanelWidth)));
             }
             else if (vScrollBar.Visible)
             {
@@ -543,6 +598,21 @@ namespace VideoEditor.Controls
             UpdateScrollBars();
             this.Invalidate();
         }
+
+        // Toggles lock state for a track
+        public void ToggleTrackLock(int trackIndex)
+        {
+            if (lockedTracks.Contains(trackIndex))
+            {
+                lockedTracks.Remove(trackIndex);
+            }
+            else
+            {
+                lockedTracks.Add(trackIndex);
+            }
+            this.Invalidate();
+        }
+
         // Inserts a new empty track ABOVE the target track
         public void InsertTrackAbove(int targetTrackIndex)
         {
@@ -553,23 +623,70 @@ namespace VideoEditor.Controls
                     item.TrackIndex++; // Shift current row and everything below it down by 1
                 }
             }
+
+            // Remap locked track indices so lock states remain aligned with rows
+            var updatedLocks = new HashSet<int>();
+            foreach (var locked in lockedTracks)
+            {
+                updatedLocks.Add(locked >= targetTrackIndex ? locked + 1 : locked);
+            }
+            lockedTracks = updatedLocks;
+
             SelectedTrackIndex = targetTrackIndex; // Set active selection to the new empty track
             this.Invalidate();
         }
 
-        // Inserts a new empty track BELOW the target track
-        public void InsertTrackBelow(int targetTrackIndex)
+        // Deletes a specific track if it contains no media clips
+        public void DeleteTrackAt(int trackIndex)
         {
-            int newTrackIndex = targetTrackIndex + 1;
-            foreach (var item in mediaItems.Where(x => x.Type != MediaType.Audio))
+            if (trackIndex < 0) return;
+
+            // Check if the target track contains any media clips
+            bool hasItemsOnTrack = mediaItems.Any(item =>
+                item.Type != MediaType.Audio && item.TrackIndex == trackIndex
+            );
+
+            if (hasItemsOnTrack)
             {
-                if (item.TrackIndex >= newTrackIndex)
+                MessageBox.Show(
+                    "Cannot delete a row that contains media items. Please clear or move the clips first.",
+                    "Row Not Empty",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                return;
+            }
+
+            // Shift track indices down for all tracks above the deleted index
+            foreach (var item in mediaItems)
+            {
+                if (item.Type != MediaType.Audio && item.TrackIndex > trackIndex)
                 {
-                    item.TrackIndex++; // Shift everything below the target row down by 1
+                    item.TrackIndex--;
                 }
             }
-            SelectedTrackIndex = newTrackIndex; // Set active selection to the new empty track
+
+            // Remap locked track indices
+            lockedTracks.Remove(trackIndex);
+            var updatedLocks = new HashSet<int>();
+            foreach (var locked in lockedTracks)
+            {
+                updatedLocks.Add(locked > trackIndex ? locked - 1 : locked);
+            }
+            lockedTracks = updatedLocks;
+
+            // Ensure selection remains within valid range
+            int maxTracks = GetMaxVisualTrackIndex();
+            if (SelectedTrackIndex >= maxTracks - 1 && SelectedTrackIndex > 0)
+            {
+                SelectedTrackIndex--;
+            }
+
             this.Invalidate();
+        }
+        public bool IsTrackLocked(int trackIndex)
+        {
+            return lockedTracks.Contains(trackIndex);
         }
         public double GetTotalDuration()
         {

@@ -55,7 +55,7 @@ namespace VideoEditor
             InitializeComponent();
 
             timelineControl.SetMediaItems(mediaItems);
-
+            previewControl.TimelineRef = timelineControl;
             WireUpEvents();
             InitializePlaybackEngine();
 

@@ -26,7 +26,14 @@ namespace VideoEditor.Controls
         private bool isDraggingBlur = false;
         private bool isResizingBlur = false;
         private Point lastMousePos;
+        // Add reference property to PreviewControl.cs
+        public TimelineControl TimelineRef { get; set; }
 
+        private bool IsItemLocked(MediaItem item)
+        {
+            if (item == null || TimelineRef == null) return false;
+            return item.Type != MediaType.Audio && TimelineRef.IsTrackLocked(item.TrackIndex);
+        }
         public int LastCanvasWidth { get; private set; } = 1080;
         public int LastCanvasHeight { get; private set; } = 1920;
 
@@ -335,7 +342,6 @@ namespace VideoEditor.Controls
             if (e.Button == MouseButtons.Left)
             {
                 this.Focus();
-                SelectedTextLabel = null;
 
                 int canvasX = (this.Width - LastCanvasWidth) / 2;
                 int canvasY = (this.Height - LastCanvasHeight) / 2;
@@ -344,6 +350,7 @@ namespace VideoEditor.Controls
                 var activeTextItems = allFrameItems
                     .Where(item => item.Type == MediaType.Text &&
                                    item.TextData != null &&
+                                   !IsItemLocked(item) && // Check if track is locked
                                    currentTimePosition >= item.StartTime &&
                                    currentTimePosition < item.StartTime + item.Duration)
                     .OrderByDescending(item => item.TrackIndex);
@@ -381,10 +388,14 @@ namespace VideoEditor.Controls
                     }
                 }
 
+                // Clear selection if clicking empty area or locked item
+                SelectedTextLabel = null;
+
                 // 2. Blur Items Hit Testing
                 var activeBlurItems = allFrameItems
                     .Where(item => item.Type == MediaType.Blur &&
                                    item.BlurData != null &&
+                                   !IsItemLocked(item) && // Check if track is locked
                                    currentTimePosition >= item.StartTime &&
                                    currentTimePosition < item.StartTime + item.Duration)
                     .OrderBy(item => item.TrackIndex);
@@ -427,7 +438,7 @@ namespace VideoEditor.Controls
                 {
                     var clickedImage = GetImageItemAtPoint(e.Location, canvasX, canvasY, LastCanvasWidth, LastCanvasHeight);
 
-                    if (clickedImage != null)
+                    if (clickedImage != null && !IsItemLocked(clickedImage)) // Check if track is locked
                     {
                         selectedPreviewItem = clickedImage;
                         SelectedItem = clickedImage;
@@ -513,7 +524,7 @@ namespace VideoEditor.Controls
 
         private void PreviewControl_MouseWheel(object sender, MouseEventArgs e)
         {
-            if (SelectedItem?.Type == MediaType.Image && selectedTextLabel == null)
+            if (SelectedItem?.Type == MediaType.Image && selectedTextLabel == null && !IsItemLocked(SelectedItem))
             {
                 float zoomDelta = e.Delta > 0 ? 1.05f : 0.95f;
                 SelectedItem.Scale = Math.Clamp(SelectedItem.Scale * zoomDelta, 0.1f, 5.0f);
