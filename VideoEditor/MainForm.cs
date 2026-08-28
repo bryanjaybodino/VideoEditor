@@ -326,6 +326,13 @@ namespace VideoEditor
                 BindTextLabelToUI(label);
             };
 
+            //previewControl.TransformCompleted += (oldState, newState) =>
+            //{
+            //    var command = new VideoEditor.Commands.TransformCommand(oldState, newState);
+            //    undoRedoManager.ExecuteCommand(command);
+            //    RefreshTimeline();
+            //};
+
             timelineControl.MouseDown += (s, e) =>
             {
                 isUserScrubbing = true;

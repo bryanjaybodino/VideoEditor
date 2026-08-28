@@ -513,11 +513,10 @@ namespace VideoEditor.Controls
 
         private void PreviewControl_MouseWheel(object sender, MouseEventArgs e)
         {
-            var topItem = activeFrameItems.OrderBy(x => x.TrackIndex).FirstOrDefault();
-            if (topItem != null && selectedTextLabel == null && SelectedItem?.Type == MediaType.Image)
+            if (SelectedItem?.Type == MediaType.Image && selectedTextLabel == null)
             {
                 float zoomDelta = e.Delta > 0 ? 1.05f : 0.95f;
-                topItem.Scale = Math.Clamp(topItem.Scale * zoomDelta, 0.1f, 5.0f);
+                SelectedItem.Scale = Math.Clamp(SelectedItem.Scale * zoomDelta, 0.1f, 5.0f);
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
