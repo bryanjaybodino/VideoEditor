@@ -123,39 +123,44 @@ namespace VideoEditor.Services
         {
             if (captions == null || captions.Count == 0) return;
 
-            var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
-            double audioStartTime = audioItem?.StartTime ?? 0;
+            var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio); //
+            double audioStartTime = audioItem?.StartTime ?? 0; //[cite: 6]
 
-            foreach (var caption in captions)
+            // 1. Find the highest existing visual track index (excluding Audio)
+            var visualItems = mediaItems.Where(x => x.Type != MediaType.Audio).ToList(); //
+            int targetTrackIndex = visualItems.Any() ? visualItems.Max(x => x.TrackIndex) + 1 : 0; //[cite: 2]
+
+            // 2. Add auto-captions onto targetTrackIndex (bottom row directly above Audio)
+            foreach (var caption in captions) //[cite: 6]
             {
-                var textLabel = new TextLabel
+                var textLabel = new TextLabel //[cite: 6]
                 {
-                    Content = caption.Text,
-                    // Relative coordinates (percentages)
-                    RelativeX = 0.05f,
-                    RelativeY = 0.65f,
-                    RelativeWidth = 0.90f,
-                    RelativeHeight = 0.25f, // Expanded vertical area for multi-line text
+                    Content = caption.Text, //[cite: 6]
+                                            // Relative coordinates (percentages)
+                    RelativeX = 0.05f, //[cite: 6]
+                    RelativeY = 0.65f, //[cite: 6]
+                    RelativeWidth = 0.90f, //[cite: 6]
+                    RelativeHeight = 0.25f, //[cite: 6]
 
                     // Absolute fallback coordinates (1080x1920 base)
-                    X = 54f,          // 5% of 1080
-                    Y = 1248f,        // 65% of 1920
-                    Width = 972f,     // 90% of 1080
-                    Height = 480f,    // 25% of 1920
+                    X = 54f,          // 5% of 1080[cite: 6]
+                    Y = 1248f,        // 65% of 1920[cite: 6]
+                    Width = 972f,     // 90% of 1080[cite: 6]
+                    Height = 480f,    // 25% of 1920[cite: 6]
 
-                    FontSize = 30f,   // Set to 30
-                    TextColor = System.Drawing.Color.White,
-                    BackgroundColor = System.Drawing.Color.FromArgb(180, 0, 0, 0),
-                    IsBold = true
+                    FontSize = 30f,   //[cite: 6]
+                    TextColor = System.Drawing.Color.White, //[cite: 6]
+                    BackgroundColor = System.Drawing.Color.FromArgb(180, 0, 0, 0), //[cite: 6]
+                    IsBold = true //[cite: 6]
                 };
 
-                mediaItems.Add(new MediaItem
+                mediaItems.Add(new MediaItem //[cite: 6]
                 {
-                    Type = MediaType.Text,
-                    StartTime = audioStartTime + caption.StartTime,
-                    Duration = Math.Max(0.5, caption.EndTime - caption.StartTime),
-                    TextData = textLabel,
-                    TrackIndex = 1
+                    Type = MediaType.Text, //[cite: 6]
+                    StartTime = audioStartTime + caption.StartTime, //[cite: 6]
+                    Duration = Math.Max(0.5, caption.EndTime - caption.StartTime), //[cite: 6]
+                    TextData = textLabel, //[cite: 6]
+                    TrackIndex = targetTrackIndex // Placed on the bottom-most visual row
                 });
             }
         }
