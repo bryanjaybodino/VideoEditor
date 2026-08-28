@@ -169,8 +169,12 @@ namespace VideoEditor.Controls
 
             UpdateScrollBars();
 
-            // 1. Tracks Background
             int maxVisualTracks = GetMaxVisualTrackIndex();
+            int leftPanelWidth = 80; // Margin boundary for controls
+            int buttonWidth = 22;
+            int buttonHeight = 16;
+
+            // 1. Full-Width Row Backgrounds
             for (int i = 0; i < maxVisualTracks; i++)
             {
                 int trackY = GetTrackY(i, MediaType.Image);
@@ -178,46 +182,44 @@ namespace VideoEditor.Controls
 
                 bool isRowSelected = (i == SelectedTrackIndex);
 
-                // Fill row background (Highlighted accent color vs Default dark grey)
-                Color rowBgColor = isRowSelected
-                    ? Color.FromArgb(45, 55, 75)   // Active row highlight color
-                    : Color.FromArgb(30, 30, 30);  // Normal dark background
-
+                Color rowBgColor = isRowSelected ? Color.FromArgb(45, 55, 75) : Color.FromArgb(30, 30, 30);
                 using (var bgBrush = new SolidBrush(rowBgColor))
                 {
-                    g.FillRectangle(bgBrush, 0, trackY, this.Width, trackHeight);
+                    g.FillRectangle(bgBrush, leftPanelWidth, trackY, this.Width - leftPanelWidth, trackHeight);
                 }
 
-                // Draw active row outline border
                 if (isRowSelected)
                 {
-                    using (var borderPen = new Pen(Color.FromArgb(0, 122, 204), 1.5f)) // Accent blue border
+                    using (var borderPen = new Pen(Color.FromArgb(0, 122, 204), 1.5f))
                     {
-                        g.DrawRectangle(borderPen, 0, trackY, this.Width - 1, trackHeight);
+                        g.DrawRectangle(borderPen, leftPanelWidth, trackY, this.Width - leftPanelWidth - 1, trackHeight);
                     }
                 }
-
-                // Draw row label with highlighted text color
-                Brush textBrush = isRowSelected ? Brushes.LightCyan : Brushes.DimGray;
-                g.DrawString($"Row {i + 1}", this.Font, textBrush, 5, trackY + 2);
             }
 
+            // Audio Row Background
             int audioY = GetTrackY(0, MediaType.Audio);
             if (audioY + trackHeight >= headerHeight && audioY <= this.Height)
             {
-                g.FillRectangle(new SolidBrush(Color.FromArgb(20, 35, 35)), 0, audioY, this.Width, trackHeight);
-                g.DrawString("Audio Row", this.Font, Brushes.DarkTurquoise, 5, audioY + 2);
+                using (var audioBgBrush = new SolidBrush(Color.FromArgb(20, 35, 35)))
+                {
+                    g.FillRectangle(audioBgBrush, leftPanelWidth, audioY, this.Width - leftPanelWidth, trackHeight);
+                }
             }
 
-            // 2. Draw Clips
+            // Set Clipping Region so clips never draw inside the left control panel
+            var originalClip = g.Clip;
+            g.SetClip(new Rectangle(leftPanelWidth, 0, this.Width - leftPanelWidth, this.Height));
+
+            // 2. Draw Clips (X starts at leftPanelWidth offset)
             foreach (var item in mediaItems)
             {
                 int y = GetTrackY(item.TrackIndex, item.Type);
-                int x = (int)(item.StartTime * pixelsPerSecond) - scrollX;
+                int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX; // Added leftPanelWidth
                 int width = (int)(item.Duration * pixelsPerSecond);
 
                 var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
-                if (rect.Bottom < headerHeight || rect.Top > this.Height || rect.Right < 0 || rect.Left > this.Width) continue;
+                if (rect.Bottom < headerHeight || rect.Top > this.Height || rect.Right < leftPanelWidth || rect.Left > this.Width) continue;
 
                 var color = Color.SteelBlue;
                 if (item.Type == MediaType.Audio) color = Color.FromArgb(30, 70, 70);
@@ -226,8 +228,10 @@ namespace VideoEditor.Controls
 
                 if (item == SelectedItem) color = Color.Crimson;
 
-                // Clip Container
-                g.FillRectangle(new SolidBrush(color), rect);
+                using (var clipBrush = new SolidBrush(color))
+                {
+                    g.FillRectangle(clipBrush, rect);
+                }
 
                 if (item == SelectedItem)
                 {
@@ -263,22 +267,19 @@ namespace VideoEditor.Controls
                     }
                 }
 
-                // Render Audio Waveform
+                // Waveforms
                 if (item.Type == MediaType.Audio && item.AudioPeaks != null && item.AudioPeaks.Length > 0)
                 {
                     using (Pen wavePen = new Pen(Color.FromArgb(100, 255, 220), 1))
                     {
                         int centerY = rect.Y + (rect.Height / 2);
                         int peakCount = item.AudioPeaks.Length;
-
                         double fullAudioDur = item.OriginalDuration > 0 ? item.OriginalDuration : item.Duration;
-                        if (fullAudioDur <= 0) fullAudioDur = item.Duration;
 
                         for (int px = 2; px < rect.Width - 2; px++)
                         {
                             double localTime = ((double)px / rect.Width) * item.Duration;
                             double sourceFileTime = item.SourceOffset + localTime;
-
                             double fileProgress = sourceFileTime / fullAudioDur;
                             int sampleIdx = (int)(fileProgress * peakCount);
 
@@ -294,12 +295,12 @@ namespace VideoEditor.Controls
                     }
                 }
 
-                // Render Text Label Duration Rectangles
+                // Text Duration Rectangles
                 if (item.TextLabels != null)
                 {
                     foreach (var label in item.TextLabels)
                     {
-                        int labelX = (int)((item.StartTime + label.StartTime) * pixelsPerSecond) - scrollX;
+                        int labelX = leftPanelWidth + (int)((item.StartTime + label.StartTime) * pixelsPerSecond) - scrollX; // Added leftPanelWidth
                         int labelWidth = (int)(label.Duration * pixelsPerSecond);
                         var textRect = new Rectangle(labelX, rect.Y + rect.Height - 18, Math.Max(labelWidth, 4), 14);
 
@@ -315,30 +316,110 @@ namespace VideoEditor.Controls
                 }
             }
 
-            // 3. Pinned Time Header
-            g.FillRectangle(new SolidBrush(Color.FromArgb(35, 35, 35)), 0, 0, this.Width, headerHeight);
-            double visibleDuration = (this.Width + scrollX) / pixelsPerSecond;
+            // Playhead Line (Offset by leftPanelWidth)
+            int playheadX = leftPanelWidth + (int)(currentTime * pixelsPerSecond) - scrollX;
+            if (playheadX >= leftPanelWidth && playheadX <= this.Width)
+            {
+                using (var playheadPen = new Pen(Color.Red, 2))
+                {
+                    g.DrawLine(playheadPen, playheadX, 0, playheadX, this.Height);
+                }
+            }
+
+            // Reset graphics clipping region
+            g.Clip = originalClip;
+
+            // 3. Pinned Time Header (Top Bar)
+            using (var headerBrush = new SolidBrush(Color.FromArgb(35, 35, 35)))
+            {
+                g.FillRectangle(headerBrush, 0, 0, this.Width, headerHeight);
+            }
+
+            double visibleDuration = (this.Width - leftPanelWidth + scrollX) / pixelsPerSecond;
             int stepSeconds = pixelsPerSecond < 20 ? 10 : (pixelsPerSecond < 50 ? 2 : 1);
 
             for (int i = 0; i <= Math.Max(GetTotalDuration() + 60, visibleDuration + 10); i += stepSeconds)
             {
-                int x = (int)(i * pixelsPerSecond) - scrollX;
-                if (x < 0 || x > this.Width) continue;
+                int x = leftPanelWidth + (int)(i * pixelsPerSecond) - scrollX; // Added leftPanelWidth
+                if (x < leftPanelWidth || x > this.Width) continue;
 
                 g.DrawLine(Pens.Gray, x, headerHeight - 8, x, headerHeight);
                 g.DrawString($"{i}s", this.Font, Brushes.Gray, x + 2, 2);
             }
 
-            // 4. Playhead Line
-            int playheadX = (int)(currentTime * pixelsPerSecond) - scrollX;
-            if (playheadX >= 0 && playheadX <= this.Width)
+            // 4. Left Header Controls Panel
+            for (int i = 0; i < maxVisualTracks; i++)
             {
-                g.DrawLine(new Pen(Color.Red, 2), playheadX, 0, playheadX, this.Height);
+                int trackY = GetTrackY(i, MediaType.Image);
+                if (trackY + trackHeight < headerHeight || trackY > this.Height) continue;
+
+                bool isRowSelected = (i == SelectedTrackIndex);
+
+                Color leftBgColor = isRowSelected ? Color.FromArgb(40, 50, 70) : Color.FromArgb(25, 25, 25);
+                using (var leftBrush = new SolidBrush(leftBgColor))
+                {
+                    g.FillRectangle(leftBrush, 0, trackY, leftPanelWidth, trackHeight);
+                }
+
+                g.DrawLine(Pens.Gray, leftPanelWidth, trackY, leftPanelWidth, trackY + trackHeight);
+
+                Rectangle rectUp = new Rectangle(5, trackY + 4, buttonWidth, buttonHeight);
+                Rectangle rectDown = new Rectangle(5, trackY + 23, buttonWidth, buttonHeight);
+
+                using (var btnBrush = new SolidBrush(Color.FromArgb(50, 50, 50)))
+                {
+                    g.FillRectangle(btnBrush, rectUp);
+                    g.FillRectangle(btnBrush, rectDown);
+                }
+
+                g.DrawRectangle(Pens.Gray, rectUp);
+                g.DrawRectangle(Pens.Gray, rectDown);
+
+                g.DrawString("▲", new Font(this.Font.FontFamily, 7f), Brushes.White, rectUp.X + 4, rectUp.Y + 1);
+                g.DrawString("▼", new Font(this.Font.FontFamily, 7f), Brushes.White, rectDown.X + 4, rectDown.Y + 1);
+
+                Brush textBrush = isRowSelected ? Brushes.LightCyan : Brushes.DimGray;
+                g.DrawString($"Row {i + 1}", this.Font, textBrush, 32, trackY + 12);
             }
+
+            // Audio Row Header
+            if (audioY + trackHeight >= headerHeight && audioY <= this.Height)
+            {
+                using (var audioHeaderBrush = new SolidBrush(Color.FromArgb(15, 30, 30)))
+                {
+                    g.FillRectangle(audioHeaderBrush, 0, audioY, leftPanelWidth, trackHeight);
+                }
+                g.DrawLine(Pens.Gray, leftPanelWidth, audioY, leftPanelWidth, audioY + trackHeight);
+                g.DrawString("Audio", this.Font, Brushes.DarkTurquoise, 32, audioY + 12);
+            }
+
+            // Top-Left Junction Box
+            using (var cornerBrush = new SolidBrush(Color.FromArgb(20, 20, 20)))
+            {
+                g.FillRectangle(cornerBrush, 0, 0, leftPanelWidth, headerHeight);
+            }
+            g.DrawLine(Pens.Gray, leftPanelWidth, 0, leftPanelWidth, headerHeight);
         }
 
         private void Timeline_MouseDown(object sender, MouseEventArgs e)
         {
+            int leftPanelWidth = 80;
+
+            if (isDraggingPlayhead)
+            {
+                CurrentTime = Math.Max(0, (e.X - leftPanelWidth + scrollX) / pixelsPerSecond);
+                this.Invalidate();
+                return;
+            }
+
+            if (isDraggingClip && activeClip != null)
+            {
+                double newStart = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - clipDragOffset;
+                activeClip.StartTime = Math.Max(0, newStart);
+                this.Invalidate();
+                return;
+            }
+
             if (e.Y <= headerHeight)
             {
                 isDraggingPlayhead = true;
@@ -346,8 +427,29 @@ namespace VideoEditor.Controls
                 return;
             }
 
-            // Always update SelectedTrackIndex first based on mouse click position
-            SelectedTrackIndex = GetTrackIndexFromY(e.Y, MediaType.Image);
+            int clickedTrackIndex = GetTrackIndexFromY(e.Y, MediaType.Image);
+            int trackY = GetTrackY(clickedTrackIndex, MediaType.Image);
+
+            // Check if click occurred in button area on the left (X <= 30)
+            if (e.X >= 5 && e.X <= 27)
+            {
+                Rectangle rectUp = new Rectangle(5, trackY + 4, 22, 16);
+                Rectangle rectDown = new Rectangle(5, trackY + 23, 22, 16);
+
+                if (rectUp.Contains(e.Location))
+                {
+                    InsertTrackAbove(clickedTrackIndex);
+                    return;
+                }
+                else if (rectDown.Contains(e.Location))
+                {
+                    InsertTrackBelow(clickedTrackIndex);
+                    return;
+                }
+            }
+
+            // Normal Row Selection & Clip Handling
+            SelectedTrackIndex = clickedTrackIndex;
 
             SelectedItem = null;
             foreach (var item in mediaItems)
@@ -360,7 +462,7 @@ namespace VideoEditor.Controls
                 if (rect.Contains(e.Location))
                 {
                     SelectedItem = item;
-                    SelectedTrackIndex = item.TrackIndex; // Sync track index if a clip is clicked
+                    SelectedTrackIndex = item.TrackIndex;
                     ClipSelected?.Invoke(item);
                     activeClip = item;
 
@@ -375,10 +477,9 @@ namespace VideoEditor.Controls
                 }
             }
 
-            // Clicking an empty row clears clip selection but keeps SelectedTrackIndex active
             ClipSelected?.Invoke(null);
             CurrentTime = (e.X + scrollX) / pixelsPerSecond;
-            this.Invalidate(); // Refresh timeline to render empty row highlight
+            this.Invalidate();
         }
 
         private void Timeline_MouseMove(object sender, MouseEventArgs e)
@@ -442,7 +543,34 @@ namespace VideoEditor.Controls
             UpdateScrollBars();
             this.Invalidate();
         }
+        // Inserts a new empty track ABOVE the target track
+        public void InsertTrackAbove(int targetTrackIndex)
+        {
+            foreach (var item in mediaItems.Where(x => x.Type != MediaType.Audio))
+            {
+                if (item.TrackIndex >= targetTrackIndex)
+                {
+                    item.TrackIndex++; // Shift current row and everything below it down by 1
+                }
+            }
+            SelectedTrackIndex = targetTrackIndex; // Set active selection to the new empty track
+            this.Invalidate();
+        }
 
+        // Inserts a new empty track BELOW the target track
+        public void InsertTrackBelow(int targetTrackIndex)
+        {
+            int newTrackIndex = targetTrackIndex + 1;
+            foreach (var item in mediaItems.Where(x => x.Type != MediaType.Audio))
+            {
+                if (item.TrackIndex >= newTrackIndex)
+                {
+                    item.TrackIndex++; // Shift everything below the target row down by 1
+                }
+            }
+            SelectedTrackIndex = newTrackIndex; // Set active selection to the new empty track
+            this.Invalidate();
+        }
         public double GetTotalDuration()
         {
             if (mediaItems.Count == 0) return 60.0;
