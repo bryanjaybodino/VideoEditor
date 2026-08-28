@@ -210,8 +210,17 @@ namespace VideoEditor.Controls
             var originalClip = g.Clip;
             g.SetClip(new Rectangle(leftPanelWidth, 0, this.Width - leftPanelWidth, this.Height));
 
-            // 2. Draw Clips (X starts at leftPanelWidth offset)
-            foreach (var item in mediaItems)
+            // 2. Draw Clips (Sorted in ascending priority order so higher priority layers paint on top)
+            var sortedItems = mediaItems.OrderBy(item => item.Type switch
+            {
+                MediaType.Audio => 0,
+                MediaType.Image => 1,
+                MediaType.Blur => 2,
+                MediaType.Text => 3,
+                _ => 0
+            });
+
+            foreach (var item in sortedItems)
             {
                 int y = GetTrackY(item.TrackIndex, item.Type);
                 int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX;
@@ -403,7 +412,6 @@ namespace VideoEditor.Controls
                 g.DrawString("▲", new Font(this.Font.FontFamily, 7.5f), Brushes.White, rectUp.X + 3, rectUp.Y + 2);
                 g.DrawString("✕", new Font(this.Font.FontFamily, 7.5f, FontStyle.Bold), Brushes.Tomato, rectDelete.X + 3, rectDelete.Y + 2);
 
-                // Using reliable wingdings / text symbols for GDI+ rendering
                 string lockText = isTrackLocked ? "L" : "U";
                 Brush lockTextBrush = isTrackLocked ? Brushes.Gold : Brushes.LightGray;
                 using (var lockFont = new Font("Segoe UI", 7.5f, FontStyle.Bold))
@@ -430,26 +438,13 @@ namespace VideoEditor.Controls
             }
             g.DrawLine(Pens.Gray, leftPanelWidth, 0, leftPanelWidth, headerHeight);
         }
-
         private void Timeline_MouseDown(object sender, MouseEventArgs e)
         {
             int leftPanelWidth = 80;
 
-            if (isDraggingPlayhead)
-            {
-                CurrentTime = Math.Max(0, (e.X - leftPanelWidth + scrollX) / pixelsPerSecond);
-                this.Invalidate();
-                return;
-            }
+            if (isDraggingPlayhead || isDraggingClip || isResizingClip) return;
 
-            if (isDraggingClip && activeClip != null)
-            {
-                double newStart = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - clipDragOffset;
-                activeClip.StartTime = Math.Max(0, newStart);
-                this.Invalidate();
-                return;
-            }
-
+            // 1. Playhead interaction
             if (e.Y <= headerHeight)
             {
                 isDraggingPlayhead = true;
@@ -460,39 +455,36 @@ namespace VideoEditor.Controls
             int clickedTrackIndex = GetTrackIndexFromY(e.Y, MediaType.Image);
             int trackY = GetTrackY(clickedTrackIndex, MediaType.Image);
 
-            // Check button clicks on the left panel
+            // 2. Left Panel Track Controls
             if (e.X < leftPanelWidth)
             {
                 int btnY = trackY + 12;
-                int btnW = 20;
-                int btnH = 20;
+                int btnW = 20, btnH = 20;
 
-                Rectangle rectUp = new Rectangle(5, btnY, btnW, btnH);
-                Rectangle rectDelete = new Rectangle(30, btnY, btnW, btnH);
-                Rectangle rectLock = new Rectangle(55, btnY, btnW, btnH);
-
-                if (rectUp.Contains(e.Location))
-                {
-                    InsertTrackAbove(clickedTrackIndex);
-                    return;
-                }
-                else if (rectDelete.Contains(e.Location))
-                {
-                    DeleteTrackAt(clickedTrackIndex);
-                    return;
-                }
-                else if (rectLock.Contains(e.Location))
-                {
-                    ToggleTrackLock(clickedTrackIndex);
-                    return;
-                }
+                if (new Rectangle(5, btnY, btnW, btnH).Contains(e.Location)) { InsertTrackAbove(clickedTrackIndex); return; }
+                if (new Rectangle(30, btnY, btnW, btnH).Contains(e.Location)) { DeleteTrackAt(clickedTrackIndex); return; }
+                if (new Rectangle(55, btnY, btnW, btnH).Contains(e.Location)) { ToggleTrackLock(clickedTrackIndex); return; }
             }
 
-            // Normal Row Selection & Clip Handling
             SelectedTrackIndex = clickedTrackIndex;
 
-            SelectedItem = null;
-            foreach (var item in mediaItems)
+            // FIX: Filter items to only check the clicked track (or audio row), 
+            // then sort by type priority (Text > Blur > Image) in case multiple items exist on the same row.
+            bool isAudioRowClicked = (e.Y >= GetTrackY(0, MediaType.Audio));
+
+            var hitTestOrder = mediaItems
+                .Where(item => isAudioRowClicked
+                    ? item.Type == MediaType.Audio
+                    : item.TrackIndex == clickedTrackIndex && item.Type != MediaType.Audio)
+                .OrderByDescending(item => item.Type switch
+                {
+                    MediaType.Text => 3,
+                    MediaType.Blur => 2,
+                    MediaType.Image => 1,
+                    _ => 0
+                });
+
+            foreach (var item in hitTestOrder)
             {
                 int y = GetTrackY(item.TrackIndex, item.Type);
                 int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX;
@@ -501,15 +493,12 @@ namespace VideoEditor.Controls
 
                 if (rect.Contains(e.Location))
                 {
-                    // Ignore clicks on clips located on locked tracks
-                    if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio)
-                    {
-                        continue;
-                    }
+                    if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio) continue;
 
                     SelectedItem = item;
                     SelectedTrackIndex = item.TrackIndex;
                     ClipSelected?.Invoke(item);
+
                     activeClip = item;
 
                     if (e.X >= (x + width - EdgeMargin) && e.X <= (x + width + EdgeMargin))
@@ -526,11 +515,12 @@ namespace VideoEditor.Controls
                 }
             }
 
+            // 4. Clicked on empty space on the timeline track
+            SelectedItem = null;
             ClipSelected?.Invoke(null);
             CurrentTime = Math.Max(0, (e.X - leftPanelWidth + scrollX) / pixelsPerSecond);
             this.Invalidate();
         }
-
         private void Timeline_MouseMove(object sender, MouseEventArgs e)
         {
             int leftPanelWidth = 80;

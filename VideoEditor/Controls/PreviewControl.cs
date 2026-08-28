@@ -449,12 +449,12 @@ namespace VideoEditor.Controls
                 }
             }
         }
-
         private void PreviewControl_MouseMove(object sender, MouseEventArgs e)
         {
             int deltaX = e.X - lastMousePos.X;
             int deltaY = e.Y - lastMousePos.Y;
 
+            // 1. Resizing Text
             if (isResizingText && selectedTextLabel != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
                 float currentW = selectedTextLabel.RelativeWidth * LastCanvasWidth;
@@ -466,6 +466,7 @@ namespace VideoEditor.Controls
                 lastMousePos = e.Location;
                 this.Invalidate();
             }
+            // 2. Dragging Text
             else if (isDraggingText && selectedTextLabel != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
                 float currentX = selectedTextLabel.RelativeX * LastCanvasWidth;
@@ -477,6 +478,7 @@ namespace VideoEditor.Controls
                 lastMousePos = e.Location;
                 this.Invalidate();
             }
+            // 3. Resizing Blur
             else if (isResizingBlur && SelectedItem?.BlurData != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
                 var blur = SelectedItem.BlurData;
@@ -490,6 +492,7 @@ namespace VideoEditor.Controls
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
+            // 4. Dragging Blur
             else if (isDraggingBlur && SelectedItem?.BlurData != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
                 var blur = SelectedItem.BlurData;
@@ -503,6 +506,7 @@ namespace VideoEditor.Controls
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
+            // 5. Dragging Image (ALWAYS use selectedPreviewItem locked from MouseDown)
             else if (isDraggingImage && selectedPreviewItem != null)
             {
                 selectedPreviewItem.PositionX += deltaX * (1080f / LastCanvasWidth);
