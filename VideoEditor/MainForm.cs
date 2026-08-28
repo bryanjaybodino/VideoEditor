@@ -58,6 +58,9 @@ namespace VideoEditor
 
             WireUpEvents();
             InitializePlaybackEngine();
+
+
+            this.WindowState = FormWindowState.Maximized;
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -336,7 +339,7 @@ namespace VideoEditor
                 ApplyAudioSeek(timelineControl.CurrentTime);
             };
         }
-
+       
         private async void btnAutoCaption_Click(object sender, EventArgs e)
         {
             var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);

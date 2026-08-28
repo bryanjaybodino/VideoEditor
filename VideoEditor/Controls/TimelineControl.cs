@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using VideoEditor.Models;
 
@@ -10,6 +11,10 @@ namespace VideoEditor.Controls
 {
     public class TimelineControl : UserControl
     {
+        // P/Invoke to apply Windows 10/11 Dark Theme to standard WinForms ScrollBars
+        [DllImport("uxtheme.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubIdList);
+
         private List<MediaItem> mediaItems = new List<MediaItem>();
         private double currentTime = 0;
         private double pixelsPerSecond = 40;
@@ -67,11 +72,24 @@ namespace VideoEditor.Controls
             this.Controls.Add(hScrollBar);
             this.Controls.Add(vScrollBar);
 
+            // Apply Windows Dark Theme to Scrollbar Controls
+            ApplyDarkModeScrollbars();
+
             this.MouseDown += Timeline_MouseDown;
             this.MouseMove += Timeline_MouseMove;
             this.MouseUp += Timeline_MouseUp;
             this.MouseWheel += Timeline_MouseWheel;
             this.Resize += (s, e) => UpdateScrollBars();
+        }
+
+        // Enables Dark Theme via UxTheme API
+        private void ApplyDarkModeScrollbars()
+        {
+            if (hScrollBar.IsHandleCreated) SetWindowTheme(hScrollBar.Handle, "DarkMode_Explorer", null);
+            else hScrollBar.HandleCreated += (s, e) => SetWindowTheme(hScrollBar.Handle, "DarkMode_Explorer", null);
+
+            if (vScrollBar.IsHandleCreated) SetWindowTheme(vScrollBar.Handle, "DarkMode_Explorer", null);
+            else vScrollBar.HandleCreated += (s, e) => SetWindowTheme(vScrollBar.Handle, "DarkMode_Explorer", null);
         }
 
         // Overloaded constructor for instantiation with existing items
@@ -182,7 +200,7 @@ namespace VideoEditor.Controls
                 var color = Color.SteelBlue;
                 if (item.Type == MediaType.Audio) color = Color.FromArgb(30, 70, 70);
                 else if (item.Type == MediaType.Text) color = Color.DarkGoldenrod;
-                else if (item.Type == MediaType.Blur) color = Color.Purple; // Added Blur color feature
+                else if (item.Type == MediaType.Blur) color = Color.Purple;
 
                 if (item == SelectedItem) color = Color.Crimson;
 
@@ -213,7 +231,6 @@ namespace VideoEditor.Controls
                     g.DrawString(item.TextData.Content, this.Font, Brushes.White, rect.X + 5, rect.Y + 12);
                 }
 
-                // Added Blur clip text label feature
                 if (item.Type == MediaType.Blur)
                 {
                     using (var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
@@ -354,7 +371,6 @@ namespace VideoEditor.Controls
                 double newStart = ((e.X + scrollX) / pixelsPerSecond) - clipDragOffset;
                 activeClip.StartTime = Math.Max(0, newStart);
 
-                // Added MediaType.Blur to track index switching during drag
                 if (activeClip.Type == MediaType.Image || activeClip.Type == MediaType.Text || activeClip.Type == MediaType.Blur)
                 {
                     int newTrack = GetTrackIndexFromY(e.Y, activeClip.Type);

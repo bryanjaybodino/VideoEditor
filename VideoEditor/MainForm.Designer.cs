@@ -12,10 +12,24 @@ namespace VideoEditor
         [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
         private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubSubAppName);
 
+        [DllImport("dwmapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20; // Use 19 for Windows 10 versions prior to 20H1
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            SetWindowTheme(this.Handle, "Explorer", null);
+
+            if (Environment.OSVersion.Version.Major >= 10)
+            {
+                // Force DWM to apply immersive dark mode to native frame/scrollbar elements
+                int useDarkMode = 1;
+                DwmSetWindowAttribute(this.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDarkMode, sizeof(int));
+
+                // Set uxtheme sub-app to DarkMode Explorer
+                SetWindowTheme(this.Handle, "DarkMode_Explorer", null);
+            }
         }
     }
 
