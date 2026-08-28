@@ -764,7 +764,7 @@ namespace VideoEditor
 
         private void AddMediaItem(string filePath, MediaType type, int targetTrack = 0)
         {
-            double duration = 4.0;
+            double duration = 6.0;
             double nextStartTime = 0;
             float[] audioPeaks = null;
 
