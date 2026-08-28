@@ -90,9 +90,9 @@ namespace VideoEditor.Controls
 
         private int GetMaxVisualTrackIndex()
         {
-            var visualItems = mediaItems.Where(x => x.Type == MediaType.Image || x.Type == MediaType.Text).ToList();
+            var visualItems = mediaItems.Where(x => x.Type == MediaType.Image || x.Type == MediaType.Text || x.Type == MediaType.Blur).ToList();
             int maxTrack = visualItems.Any() ? visualItems.Max(x => x.TrackIndex) : 0;
-            return maxTrack + 2; // Always leaves empty space below for new rows
+            return maxTrack + 2;
         }
 
         private int GetTotalContentHeight()
@@ -182,6 +182,7 @@ namespace VideoEditor.Controls
                 var color = Color.SteelBlue;
                 if (item.Type == MediaType.Audio) color = Color.FromArgb(30, 70, 70);
                 else if (item.Type == MediaType.Text) color = Color.DarkGoldenrod;
+                else if (item.Type == MediaType.Blur) color = Color.Purple; // Added Blur color feature
 
                 if (item == SelectedItem) color = Color.Crimson;
 
@@ -210,6 +211,17 @@ namespace VideoEditor.Controls
                 if (item.Type == MediaType.Text && item.TextData != null)
                 {
                     g.DrawString(item.TextData.Content, this.Font, Brushes.White, rect.X + 5, rect.Y + 12);
+                }
+
+                // Added Blur clip text label feature
+                if (item.Type == MediaType.Blur)
+                {
+                    using (var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+                    using (var font = new Font(this.Font.FontFamily, 8.5f, FontStyle.Regular))
+                    {
+                        var textRect = new Rectangle(rect.X + 4, rect.Y + 4, rect.Width - 8, rect.Height - 8);
+                        g.DrawString("Blur Overlay", font, Brushes.White, textRect, format);
+                    }
                 }
 
                 // Render Audio Waveform
@@ -342,7 +354,8 @@ namespace VideoEditor.Controls
                 double newStart = ((e.X + scrollX) / pixelsPerSecond) - clipDragOffset;
                 activeClip.StartTime = Math.Max(0, newStart);
 
-                if (activeClip.Type == MediaType.Image || activeClip.Type == MediaType.Text)
+                // Added MediaType.Blur to track index switching during drag
+                if (activeClip.Type == MediaType.Image || activeClip.Type == MediaType.Text || activeClip.Type == MediaType.Blur)
                 {
                     int newTrack = GetTrackIndexFromY(e.Y, activeClip.Type);
                     if (activeClip.TrackIndex != newTrack)

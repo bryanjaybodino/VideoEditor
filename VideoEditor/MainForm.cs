@@ -197,6 +197,47 @@ namespace VideoEditor
                 RefreshTimeline();
             };
 
+            // Inside WireUpEvents() in MainForm.cs:
+            btnBlurOverlay.Click += (s, e) =>
+            {
+                float targetWidth = 300f;
+                float targetHeight = 300f;
+                float targetX = 200f;
+                float targetY = 200f;
+
+                int canvasW = previewControl.LastCanvasWidth > 0 ? previewControl.LastCanvasWidth : 1080;
+                int canvasH = previewControl.LastCanvasHeight > 0 ? previewControl.LastCanvasHeight : 1920;
+
+                var newBlur = new BlurOverlay
+                {
+                    X = targetX,
+                    Y = targetY,
+                    Width = targetWidth,
+                    Height = targetHeight,
+                    RelativeX = targetX / canvasW,
+                    RelativeY = targetY / canvasH,
+                    RelativeWidth = targetWidth / canvasW,
+                    RelativeHeight = targetHeight / canvasH,
+                    BlurRadius = 15
+                };
+
+                var blurMediaItem = new MediaItem
+                {
+                    Type = MediaType.Blur,
+                    StartTime = timelineControl.CurrentTime,
+                    Duration = 3.0,
+                    TrackIndex = 1, // Drag & drop to any track row on timeline
+                    BlurData = newBlur
+                };
+
+                var command = new VideoEditor.Commands.AddMediaItemCommand(mediaItems, blurMediaItem);
+                undoRedoManager.ExecuteCommand(command);
+
+                SyncListBox();
+                RefreshTimeline();
+            };
+
+
             numFontSize.ValueChanged += (s, e) =>
             {
                 if (!isBindingUI && previewControl.SelectedTextLabel != null)

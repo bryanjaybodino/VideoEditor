@@ -30,9 +30,12 @@ namespace VideoEditor.Services
             if (timeRemaining < item.OutEffectDuration && item.OutEffectDuration > 0)
                 ApplyEffect(item.OutEffectType, (float)(timeRemaining / item.OutEffectDuration), false, ref opacity, ref scale, ref offsetX, ref offsetY, ref blurAmount, ref blurAngleX, ref blurAngleY, ref waveAmount, canvasWidth, canvasHeight);
 
-            // Bounds Calculation
-            float finalScale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * item.Scale * scale;
-            int w = (int)(img.Width * finalScale), h = (int)(img.Height * finalScale);
+            // Bounds Calculation (REPLACE OLD SCALING LINES HERE)
+            float scaleX = (float)canvasWidth / img.Width;
+            float scaleY = (float)canvasHeight / img.Height;
+            float finalScale = Math.Max(scaleX, scaleY) * item.Scale * scale;
+            int w = (int)(img.Width * finalScale);
+            int h = (int)(img.Height * finalScale);
 
             float posX = (item.PositionX * (canvasWidth / 1080f)) + offsetX + (waveAmount * (float)Math.Sin(localTime * 10));
             float posY = (item.PositionY * (canvasHeight / 1920f)) + offsetY;
@@ -95,6 +98,109 @@ namespace VideoEditor.Services
             g.DrawImage(img, bounds, 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attr);
         }
 
+        // Inside VideoRenderHelper.cs
+        public static void DrawBlurOverlay(Graphics g, BlurOverlay blur, List<MediaItem> allItems, double currentTime, int canvasX, int canvasY, int canvasWidth, int canvasHeight, int blurTrackIndex)
+        {
+            if (blur == null) return;
+
+            int bx = canvasX + (int)(blur.RelativeX * canvasWidth);
+            int by = canvasY + (int)(blur.RelativeY * canvasHeight);
+            int bw = (int)(blur.RelativeWidth * canvasWidth);
+            int bh = (int)(blur.RelativeHeight * canvasHeight);
+
+            Rectangle blurRect = new Rectangle(bx, by, bw, bh);
+            blurRect.Intersect(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
+
+            if (blurRect.Width <= 0 || blurRect.Height <= 0) return;
+
+            using (Bitmap region = new Bitmap(blurRect.Width, blurRect.Height, PixelFormat.Format32bppArgb))
+            {
+                using (Graphics regG = Graphics.FromImage(region))
+                {
+                    regG.SmoothingMode = SmoothingMode.AntiAlias;
+                    regG.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    regG.Clear(Color.Black);
+
+                    regG.TranslateTransform(-blurRect.X, -blurRect.Y);
+
+                    // Filter images that exist strictly UNDERNEATH this blur overlay (higher track index)
+                    var underlyingImages = allItems
+                        .Where(i => i.Type == MediaType.Image &&
+                                    i.TrackIndex > blurTrackIndex &&
+                                    currentTime >= i.StartTime &&
+                                    currentTime < i.StartTime + i.Duration)
+                        .OrderByDescending(i => i.TrackIndex);
+
+                    foreach (var item in underlyingImages)
+                    {
+                        if (!string.IsNullOrEmpty(item.FilePath) && File.Exists(item.FilePath))
+                        {
+                            using (var img = Image.FromFile(item.FilePath))
+                            {
+                                DrawImageItem(regG, img, item, currentTime, canvasX, canvasY, canvasWidth, canvasHeight);
+                            }
+                        }
+                    }
+                }
+
+                ApplyBoxBlur(region, blur.BlurRadius > 0 ? blur.BlurRadius : 15);
+                g.DrawImage(region, blurRect.Location);
+            }
+        }
+
+        // Fast box blur algorithm operating directly on bitmap memory
+        private static void ApplyBoxBlur(Bitmap bmp, int radius)
+        {
+            Rectangle rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+            BitmapData bmpData = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+
+            IntPtr ptr = bmpData.Scan0;
+            int bytes = Math.Abs(bmpData.Stride) * bmp.Height;
+            byte[] rgbValues = new byte[bytes];
+            System.Runtime.InteropServices.Marshal.Copy(ptr, rgbValues, 0, bytes);
+
+            int w = bmp.Width;
+            int h = bmp.Height;
+            int stride = bmpData.Stride;
+
+            // Horizontal & Vertical box blur passes
+            for (int pass = 0; pass < 2; pass++)
+            {
+                for (int y = 0; y < h; y++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        int rSum = 0, gSum = 0, bSum = 0, count = 0;
+
+                        for (int k = -radius; k <= radius; k += 2)
+                        {
+                            int px = Math.Clamp(x + k, 0, w - 1);
+                            int idx = (y * stride) + (px * 4);
+
+                            bSum += rgbValues[idx];
+                            gSum += rgbValues[idx + 1];
+                            rSum += rgbValues[idx + 2];
+                            count++;
+                        }
+
+                        int currentIdx = (y * stride) + (x * 4);
+                        rgbValues[currentIdx] = (byte)(bSum / count);
+                        rgbValues[currentIdx + 1] = (byte)(gSum / count);
+                        rgbValues[currentIdx + 2] = (byte)(rSum / count);
+                    }
+                }
+            }
+
+            System.Runtime.InteropServices.Marshal.Copy(rgbValues, 0, ptr, bytes);
+            bmp.UnlockBits(bmpData);
+        }
+
+        private static Bitmap GetCanvasBitmap(Graphics g)
+        {
+            // Native handle bitmap fallback
+            return new Bitmap((int)g.VisibleClipBounds.Width, (int)g.VisibleClipBounds.Height, g);
+        }
+
         public static Bitmap RenderExportFrame(List<MediaItem> allItems, double currentTime, int canvasWidth = 1080, int canvasHeight = 1920)
         {
             Bitmap frame = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format32bppArgb);
@@ -106,6 +212,7 @@ namespace VideoEditor.Services
 
                 var active = allItems.Where(i => currentTime >= i.StartTime && currentTime < i.StartTime + i.Duration);
 
+                // 1. Render Images
                 foreach (var item in active.Where(i => i.Type == MediaType.Image).OrderByDescending(i => i.TrackIndex))
                 {
                     if (File.Exists(item.FilePath))
@@ -122,8 +229,16 @@ namespace VideoEditor.Services
                     }
                 }
 
+                // 2. Render Blur Overlays
+                foreach (var blurItem in active.Where(i => i.Type == MediaType.Blur && i.BlurData != null).OrderByDescending(i => i.TrackIndex))
+                {
+                    DrawBlurOverlay(g, blurItem.BlurData, allItems, currentTime, 0, 0, canvasWidth, canvasHeight, blurItem.TrackIndex);
+                }
+                // 3. Render Text Overlays
                 foreach (var textItem in active.Where(i => i.Type == MediaType.Text && i.TextData != null))
+                {
                     DrawTextLabel(g, textItem.TextData, 0, 0, canvasWidth, canvasHeight);
+                }
             }
             return frame;
         }

@@ -52,8 +52,8 @@ namespace VideoEditor
             btnImport = new Button();
             btnPlayPause = new Button();
             btnDelete = new Button();
-            btnExport = new Button();
             btnAutoCaption = new Button();
+            btnExport = new Button();
             leftPanel = new Panel();
             mediaListBox = new ListBox();
             previewControl = new PreviewControl();
@@ -77,6 +77,9 @@ namespace VideoEditor
             numBoxWidth = new NumericUpDown();
             numBoxHeight = new NumericUpDown();
             lblDivider2 = new Label();
+            lblHeaderBlur = new Label();
+            btnBlurOverlay = new Button();
+            lblDivider3 = new Label();
             lblHeaderAnim = new Label();
             lblDuration = new Label();
             numDuration = new NumericUpDown();
@@ -146,7 +149,7 @@ namespace VideoEditor
             // 
             // btnImport
             // 
-            btnImport.BackColor = Color.FromArgb(0, 120, 215);
+            btnImport.BackColor = Color.FromArgb(48, 48, 48);
             btnImport.FlatAppearance.BorderSize = 0;
             btnImport.FlatStyle = FlatStyle.Flat;
             btnImport.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
@@ -161,7 +164,7 @@ namespace VideoEditor
             // 
             // btnPlayPause
             // 
-            btnPlayPause.BackColor = Color.FromArgb(0, 120, 215);
+            btnPlayPause.BackColor = Color.FromArgb(48, 48, 48);
             btnPlayPause.FlatAppearance.BorderSize = 0;
             btnPlayPause.FlatStyle = FlatStyle.Flat;
             btnPlayPause.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
@@ -176,7 +179,7 @@ namespace VideoEditor
             // 
             // btnDelete
             // 
-            btnDelete.BackColor = Color.FromArgb(0, 120, 215);
+            btnDelete.BackColor = Color.Crimson;
             btnDelete.FlatAppearance.BorderSize = 0;
             btnDelete.FlatStyle = FlatStyle.Flat;
             btnDelete.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
@@ -189,24 +192,9 @@ namespace VideoEditor
             btnDelete.Text = "🗑 Delete Selected";
             btnDelete.UseVisualStyleBackColor = false;
             // 
-            // btnExport
-            // 
-            btnExport.BackColor = Color.FromArgb(48, 48, 48);
-            btnExport.FlatAppearance.BorderSize = 0;
-            btnExport.FlatStyle = FlatStyle.Flat;
-            btnExport.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-            btnExport.ForeColor = Color.White;
-            btnExport.Location = new Point(602, 10);
-            btnExport.Margin = new Padding(0, 0, 8, 0);
-            btnExport.Name = "btnExport";
-            btnExport.Size = new Size(140, 32);
-            btnExport.TabIndex = 3;
-            btnExport.Text = "Export Video";
-            btnExport.UseVisualStyleBackColor = false;
-            // 
             // btnAutoCaption
             // 
-            btnAutoCaption.BackColor = Color.FromArgb(0, 120, 215);
+            btnAutoCaption.BackColor = Color.FromArgb(192, 192, 0);
             btnAutoCaption.FlatAppearance.BorderSize = 0;
             btnAutoCaption.FlatStyle = FlatStyle.Flat;
             btnAutoCaption.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
@@ -218,6 +206,21 @@ namespace VideoEditor
             btnAutoCaption.TabIndex = 4;
             btnAutoCaption.Text = "Auto Caption";
             btnAutoCaption.UseVisualStyleBackColor = false;
+            // 
+            // btnExport
+            // 
+            btnExport.BackColor = SystemColors.Highlight;
+            btnExport.FlatAppearance.BorderSize = 0;
+            btnExport.FlatStyle = FlatStyle.Flat;
+            btnExport.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            btnExport.ForeColor = Color.White;
+            btnExport.Location = new Point(602, 10);
+            btnExport.Margin = new Padding(0, 0, 8, 0);
+            btnExport.Name = "btnExport";
+            btnExport.Size = new Size(140, 32);
+            btnExport.TabIndex = 3;
+            btnExport.Text = "Export Video";
+            btnExport.UseVisualStyleBackColor = false;
             // 
             // leftPanel
             // 
@@ -267,6 +270,9 @@ namespace VideoEditor
             rightPanel.Controls.Add(lblBoxSize);
             rightPanel.Controls.Add(sizeFlow);
             rightPanel.Controls.Add(lblDivider2);
+            rightPanel.Controls.Add(lblHeaderBlur);
+            rightPanel.Controls.Add(btnBlurOverlay);
+            rightPanel.Controls.Add(lblDivider3);
             rightPanel.Controls.Add(lblHeaderAnim);
             rightPanel.Controls.Add(lblDuration);
             rightPanel.Controls.Add(numDuration);
@@ -391,7 +397,7 @@ namespace VideoEditor
             btnAddText.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
             btnAddText.ForeColor = Color.White;
             btnAddText.Location = new Point(12, 171);
-            btnAddText.Margin = new Padding(0, 0, 8, 5);
+            btnAddText.Margin = new Padding(0, 0, 0, 5);
             btnAddText.Name = "btnAddText";
             btnAddText.Size = new Size(310, 32);
             btnAddText.TabIndex = 5;
@@ -403,7 +409,7 @@ namespace VideoEditor
             lblFontSize.AutoSize = true;
             lblFontSize.Font = new Font("Segoe UI", 8F);
             lblFontSize.ForeColor = Color.FromArgb(170, 170, 170);
-            lblFontSize.Location = new Point(12, 212);
+            lblFontSize.Location = new Point(12, 208);
             lblFontSize.Margin = new Padding(0, 4, 0, 2);
             lblFontSize.Name = "lblFontSize";
             lblFontSize.Size = new Size(67, 19);
@@ -414,7 +420,7 @@ namespace VideoEditor
             // 
             numFontSize.BackColor = Color.FromArgb(38, 38, 38);
             numFontSize.ForeColor = Color.FromArgb(240, 240, 240);
-            numFontSize.Location = new Point(12, 235);
+            numFontSize.Location = new Point(12, 229);
             numFontSize.Margin = new Padding(0, 2, 0, 8);
             numFontSize.Minimum = new decimal(new int[] { 8, 0, 0, 0 });
             numFontSize.Name = "numFontSize";
@@ -426,7 +432,7 @@ namespace VideoEditor
             // 
             colorFlow.Controls.Add(btnTextColor);
             colorFlow.Controls.Add(btnBgColor);
-            colorFlow.Location = new Point(15, 273);
+            colorFlow.Location = new Point(12, 264);
             colorFlow.Name = "colorFlow";
             colorFlow.Size = new Size(310, 35);
             colorFlow.TabIndex = 8;
@@ -467,7 +473,7 @@ namespace VideoEditor
             lblBoxSize.AutoSize = true;
             lblBoxSize.Font = new Font("Segoe UI", 8F);
             lblBoxSize.ForeColor = Color.FromArgb(170, 170, 170);
-            lblBoxSize.Location = new Point(12, 315);
+            lblBoxSize.Location = new Point(12, 302);
             lblBoxSize.Margin = new Padding(0, 4, 0, 2);
             lblBoxSize.Name = "lblBoxSize";
             lblBoxSize.Size = new Size(132, 19);
@@ -478,7 +484,7 @@ namespace VideoEditor
             // 
             sizeFlow.Controls.Add(numBoxWidth);
             sizeFlow.Controls.Add(numBoxHeight);
-            sizeFlow.Location = new Point(15, 339);
+            sizeFlow.Location = new Point(12, 323);
             sizeFlow.Name = "sizeFlow";
             sizeFlow.Size = new Size(310, 35);
             sizeFlow.TabIndex = 10;
@@ -511,22 +517,58 @@ namespace VideoEditor
             // lblDivider2
             // 
             lblDivider2.BackColor = Color.FromArgb(60, 60, 60);
-            lblDivider2.Location = new Point(12, 387);
+            lblDivider2.Location = new Point(12, 371);
             lblDivider2.Margin = new Padding(0, 10, 0, 10);
             lblDivider2.Name = "lblDivider2";
             lblDivider2.Size = new Size(310, 1);
             lblDivider2.TabIndex = 11;
+            // 
+            // lblHeaderBlur
+            // 
+            lblHeaderBlur.AutoSize = true;
+            lblHeaderBlur.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            lblHeaderBlur.ForeColor = Color.FromArgb(100, 180, 245);
+            lblHeaderBlur.Location = new Point(12, 390);
+            lblHeaderBlur.Margin = new Padding(0, 8, 0, 3);
+            lblHeaderBlur.Name = "lblHeaderBlur";
+            lblHeaderBlur.Size = new Size(95, 20);
+            lblHeaderBlur.TabIndex = 12;
+            lblHeaderBlur.Text = "Blur Overlay";
+            // 
+            // btnBlurOverlay
+            // 
+            btnBlurOverlay.BackColor = Color.FromArgb(70, 70, 70);
+            btnBlurOverlay.FlatAppearance.BorderSize = 0;
+            btnBlurOverlay.FlatStyle = FlatStyle.Flat;
+            btnBlurOverlay.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            btnBlurOverlay.ForeColor = Color.White;
+            btnBlurOverlay.Location = new Point(12, 413);
+            btnBlurOverlay.Margin = new Padding(0, 0, 0, 5);
+            btnBlurOverlay.Name = "btnBlurOverlay";
+            btnBlurOverlay.Size = new Size(310, 32);
+            btnBlurOverlay.TabIndex = 13;
+            btnBlurOverlay.Text = "💧 Add Blur Overlay";
+            btnBlurOverlay.UseVisualStyleBackColor = false;
+            // 
+            // lblDivider3
+            // 
+            lblDivider3.BackColor = Color.FromArgb(60, 60, 60);
+            lblDivider3.Location = new Point(12, 450);
+            lblDivider3.Margin = new Padding(0, 10, 0, 10);
+            lblDivider3.Name = "lblDivider3";
+            lblDivider3.Size = new Size(310, 1);
+            lblDivider3.TabIndex = 14;
             // 
             // lblHeaderAnim
             // 
             lblHeaderAnim.AutoSize = true;
             lblHeaderAnim.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
             lblHeaderAnim.ForeColor = Color.FromArgb(100, 180, 245);
-            lblHeaderAnim.Location = new Point(12, 406);
+            lblHeaderAnim.Location = new Point(12, 469);
             lblHeaderAnim.Margin = new Padding(0, 8, 0, 3);
             lblHeaderAnim.Name = "lblHeaderAnim";
             lblHeaderAnim.Size = new Size(117, 20);
-            lblHeaderAnim.TabIndex = 12;
+            lblHeaderAnim.TabIndex = 15;
             lblHeaderAnim.Text = "Clip & Animation";
             // 
             // lblDuration
@@ -534,11 +576,11 @@ namespace VideoEditor
             lblDuration.AutoSize = true;
             lblDuration.Font = new Font("Segoe UI", 8F);
             lblDuration.ForeColor = Color.FromArgb(170, 170, 170);
-            lblDuration.Location = new Point(12, 433);
+            lblDuration.Location = new Point(12, 496);
             lblDuration.Margin = new Padding(0, 4, 0, 2);
             lblDuration.Name = "lblDuration";
             lblDuration.Size = new Size(111, 19);
-            lblDuration.TabIndex = 13;
+            lblDuration.TabIndex = 16;
             lblDuration.Text = "Clip Duration (s):";
             // 
             // numDuration
@@ -547,11 +589,11 @@ namespace VideoEditor
             numDuration.DecimalPlaces = 1;
             numDuration.ForeColor = Color.FromArgb(240, 240, 240);
             numDuration.Increment = new decimal(new int[] { 1, 0, 0, 65536 });
-            numDuration.Location = new Point(12, 456);
+            numDuration.Location = new Point(12, 519);
             numDuration.Margin = new Padding(0, 2, 0, 8);
             numDuration.Name = "numDuration";
             numDuration.Size = new Size(310, 27);
-            numDuration.TabIndex = 14;
+            numDuration.TabIndex = 17;
             numDuration.Value = new decimal(new int[] { 5, 0, 0, 0 });
             // 
             // lblInAnimHeader
@@ -559,22 +601,22 @@ namespace VideoEditor
             lblInAnimHeader.AutoSize = true;
             lblInAnimHeader.Font = new Font("Segoe UI", 8F);
             lblInAnimHeader.ForeColor = Color.FromArgb(170, 170, 170);
-            lblInAnimHeader.Location = new Point(12, 495);
+            lblInAnimHeader.Location = new Point(12, 558);
             lblInAnimHeader.Margin = new Padding(0, 4, 0, 2);
             lblInAnimHeader.Name = "lblInAnimHeader";
             lblInAnimHeader.Size = new Size(176, 19);
-            lblInAnimHeader.TabIndex = 15;
+            lblInAnimHeader.TabIndex = 18;
             lblInAnimHeader.Text = "In Animation / Duration (s):";
             // 
             // inAnimFlow
             // 
             inAnimFlow.Controls.Add(cbInEffect);
             inAnimFlow.Controls.Add(numInDuration);
-            inAnimFlow.Location = new Point(12, 516);
+            inAnimFlow.Location = new Point(12, 579);
             inAnimFlow.Margin = new Padding(0, 0, 0, 8);
             inAnimFlow.Name = "inAnimFlow";
             inAnimFlow.Size = new Size(310, 35);
-            inAnimFlow.TabIndex = 16;
+            inAnimFlow.TabIndex = 19;
             inAnimFlow.WrapContents = false;
             // 
             // cbInEffect
@@ -609,22 +651,22 @@ namespace VideoEditor
             lblOutAnimHeader.AutoSize = true;
             lblOutAnimHeader.Font = new Font("Segoe UI", 8F);
             lblOutAnimHeader.ForeColor = Color.FromArgb(170, 170, 170);
-            lblOutAnimHeader.Location = new Point(12, 563);
+            lblOutAnimHeader.Location = new Point(12, 626);
             lblOutAnimHeader.Margin = new Padding(0, 4, 0, 2);
             lblOutAnimHeader.Name = "lblOutAnimHeader";
             lblOutAnimHeader.Size = new Size(188, 19);
-            lblOutAnimHeader.TabIndex = 17;
+            lblOutAnimHeader.TabIndex = 20;
             lblOutAnimHeader.Text = "Out Animation / Duration (s):";
             // 
             // outAnimFlow
             // 
             outAnimFlow.Controls.Add(cbOutEffect);
             outAnimFlow.Controls.Add(numOutDuration);
-            outAnimFlow.Location = new Point(12, 584);
+            outAnimFlow.Location = new Point(12, 647);
             outAnimFlow.Margin = new Padding(0, 0, 0, 8);
             outAnimFlow.Name = "outAnimFlow";
             outAnimFlow.Size = new Size(310, 35);
-            outAnimFlow.TabIndex = 18;
+            outAnimFlow.TabIndex = 21;
             outAnimFlow.WrapContents = false;
             // 
             // cbOutEffect
@@ -695,6 +737,49 @@ namespace VideoEditor
             ResumeLayout(false);
         }
 
+        private void RightPanel_SizeChanged(object sender, EventArgs e)
+        {
+            int targetWidth = rightPanel.ClientSize.Width - rightPanel.Padding.Left - rightPanel.Padding.Right - 20;
+            if (targetWidth <= 0) return;
+
+            btnSplit.Width = targetWidth;
+            row1Flow.Width = targetWidth;
+
+            int halfWidth = (targetWidth - 8) / 2;
+            btnSplitLeft.Width = halfWidth;
+            btnSplitRight.Width = halfWidth;
+            row2Flow.Width = targetWidth;
+
+            lblDivider1.Width = targetWidth;
+            btnAddText.Width = targetWidth;
+            numFontSize.Width = targetWidth;
+
+            btnTextColor.Width = halfWidth;
+            btnBgColor.Width = halfWidth;
+            colorFlow.Width = targetWidth;
+
+            numBoxWidth.Width = halfWidth;
+            numBoxHeight.Width = halfWidth;
+            sizeFlow.Width = targetWidth;
+
+            lblDivider2.Width = targetWidth;
+            btnBlurOverlay.Width = targetWidth;
+            lblDivider3.Width = targetWidth;
+
+            numDuration.Width = targetWidth;
+
+            int effectWidth = (int)(targetWidth * 0.6);
+            int durationWidth = targetWidth - effectWidth - 8;
+
+            cbInEffect.Width = effectWidth;
+            numInDuration.Width = durationWidth;
+            inAnimFlow.Width = targetWidth;
+
+            cbOutEffect.Width = effectWidth;
+            numOutDuration.Width = durationWidth;
+            outAnimFlow.Width = targetWidth;
+        }
+
         #endregion
 
         private TableLayoutPanel mainLayout;
@@ -702,6 +787,7 @@ namespace VideoEditor
         private Button btnImport;
         private Button btnPlayPause;
         private Button btnDelete;
+        private Button btnAutoCaption;
         private Button btnExport;
         private Panel leftPanel;
         private ListBox mediaListBox;
@@ -726,6 +812,9 @@ namespace VideoEditor
         private NumericUpDown numBoxWidth;
         private NumericUpDown numBoxHeight;
         private Label lblDivider2;
+        private Label lblHeaderBlur;
+        private Button btnBlurOverlay;
+        private Label lblDivider3;
         private Label lblHeaderAnim;
         private Label lblDuration;
         private NumericUpDown numDuration;
@@ -738,46 +827,5 @@ namespace VideoEditor
         private ComboBox cbOutEffect;
         private NumericUpDown numOutDuration;
         private TimelineControl timelineControl;
-
-        private void RightPanel_SizeChanged(object sender, EventArgs e)
-        {
-            int availableWidth = rightPanel.ClientSize.Width - rightPanel.Padding.Horizontal - 20;
-            if (availableWidth < 100) return;
-
-            // Update full-width controls
-            row1Flow.Width = availableWidth;
-            btnSplit.Width = availableWidth;
-
-            row2Flow.Width = availableWidth;
-            int halfWidth = (availableWidth - 8) / 2;
-            btnSplitLeft.Width = halfWidth;
-            btnSplitRight.Width = halfWidth;
-
-            lblDivider1.Width = availableWidth;
-            btnAddText.Width = availableWidth;
-            numFontSize.Width = availableWidth;
-
-            colorFlow.Width = availableWidth;
-            btnTextColor.Width = halfWidth;
-            btnBgColor.Width = halfWidth;
-
-            sizeFlow.Width = availableWidth;
-            numBoxWidth.Width = halfWidth;
-            numBoxHeight.Width = halfWidth;
-
-            lblDivider2.Width = availableWidth;
-            numDuration.Width = availableWidth;
-
-            inAnimFlow.Width = availableWidth;
-            int comboWidth = (int)(availableWidth * 0.6f);
-            int numWidth = availableWidth - comboWidth - 8;
-            cbInEffect.Width = comboWidth;
-            numInDuration.Width = numWidth;
-
-            outAnimFlow.Width = availableWidth;
-            cbOutEffect.Width = comboWidth;
-            numOutDuration.Width = numWidth;
-        }
-        private Button btnAutoCaption;
     }
 }

@@ -7,7 +7,8 @@ namespace VideoEditor.Models
     {
         Image,
         Audio,
-        Text
+        Text,
+        Blur
     }
 
     public class TransitionEffect
@@ -35,6 +36,19 @@ namespace VideoEditor.Models
 
         public double StartTime { get; set; }
         public double Duration { get; set; } = 3.0;
+    }
+
+    public class BlurOverlay
+    {
+        public float RelativeX { get; set; } = 0.2f;
+        public float RelativeY { get; set; } = 0.2f;
+        public float RelativeWidth { get; set; } = 0.3f;
+        public float RelativeHeight { get; set; } = 0.3f;
+        public float X { get; set; } = 200;
+        public float Y { get; set; } = 200;
+        public float Width { get; set; } = 300;
+        public float Height { get; set; } = 300;
+        public int BlurRadius { get; set; } = 15;
     }
 
     public class Caption
@@ -91,5 +105,7 @@ namespace VideoEditor.Models
         public List<TextLabel> TextLabels { get; set; } = new List<TextLabel>();
         public TextLabel TextData { get; set; }
         public List<Caption> Captions { get; set; } = new List<Caption>();
+
+        public BlurOverlay BlurData { get; set; }
     }
 }
