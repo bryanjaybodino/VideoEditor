@@ -775,9 +775,12 @@ namespace VideoEditor
             }
             else if (type == MediaType.Image)
             {
-                // Find last image on the specified track
-                var lastImage = mediaItems.Where(x => x.Type == MediaType.Image && x.TrackIndex == targetTrack).LastOrDefault();
-                if (lastImage != null) nextStartTime = lastImage.StartTime + lastImage.Duration;
+                // FIX: Find the MAXIMUM end time on the target track instead of relying on list order
+                var trackImages = mediaItems.Where(x => x.Type == MediaType.Image && x.TrackIndex == targetTrack);
+                if (trackImages.Any())
+                {
+                    nextStartTime = trackImages.Max(x => x.StartTime + x.Duration);
+                }
             }
 
             double halfDuration = duration / 2.0;
@@ -790,7 +793,7 @@ namespace VideoEditor
                 OriginalDuration = duration,
                 SourceOffset = 0,
                 StartTime = nextStartTime,
-                TrackIndex = targetTrack, // Assign target track
+                TrackIndex = targetTrack,
                 AudioPeaks = audioPeaks,
                 InEffect = new TransitionEffect { Type = "DynamicZoomBlur", Duration = halfDuration },
                 OutEffect = new TransitionEffect { Type = "DynamicZoomBlur", Duration = halfDuration }
