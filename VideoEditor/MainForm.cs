@@ -44,6 +44,8 @@ namespace VideoEditor
         private double pendingScrubTime = -1;
 
         private bool isBindingUI = false;
+        private UndoRedoManager undoRedoManager = new UndoRedoManager();
+        private string userApiKey = string.Empty;
 
         public MainForm()
         {
@@ -52,18 +54,90 @@ namespace VideoEditor
 
             InitializeComponent();
 
-            // Pass media list reference to custom timeline control after initialize
             timelineControl.SetMediaItems(mediaItems);
 
             WireUpEvents();
             InitializePlaybackEngine();
         }
 
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.Delete)
+            {
+                DeleteSelectedMedia();
+                return true;
+            }
+
+            if (keyData == (Keys.Control | Keys.Z))
+            {
+                Undo();
+                return true;
+            }
+
+            if (keyData == (Keys.Control | Keys.Y))
+            {
+                Redo();
+                return true;
+            }
+
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        private void DeleteSelectedMedia()
+        {
+            var itemToDelete = timelineControl.SelectedItem;
+            if (itemToDelete != null)
+            {
+                var command = new VideoEditor.Commands.DeleteMediaItemCommand(mediaItems, itemToDelete);
+                undoRedoManager.ExecuteCommand(command);
+
+                mediaListBox.Items.Remove(Path.GetFileName(itemToDelete.FilePath) ?? "Text Layer");
+                RefreshTimeline();
+            }
+            else if (mediaListBox.SelectedIndex >= 0)
+            {
+                int idx = mediaListBox.SelectedIndex;
+                var item = mediaItems[idx];
+                var command = new VideoEditor.Commands.DeleteMediaItemCommand(mediaItems, item);
+                undoRedoManager.ExecuteCommand(command);
+
+                mediaListBox.Items.RemoveAt(idx);
+                RefreshTimeline();
+            }
+        }
+
+        private void Undo()
+        {
+            if (undoRedoManager.CanUndo)
+            {
+                undoRedoManager.Undo();
+                SyncListBox();
+                RefreshTimeline();
+            }
+        }
+
+        private void Redo()
+        {
+            if (undoRedoManager.CanRedo)
+            {
+                undoRedoManager.Redo();
+                SyncListBox();
+                RefreshTimeline();
+            }
+        }
+
+        private void SyncListBox()
+        {
+            mediaListBox.Items.Clear();
+            foreach (var item in mediaItems)
+            {
+                mediaListBox.Items.Add(Path.GetFileName(item.FilePath) ?? "Text Layer");
+            }
+        }
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-
-            // Apply dark mode scrollbars recursively to the main form and all child controls
             ApplyDarkModeTheme(this);
         }
 
@@ -71,7 +145,6 @@ namespace VideoEditor
         {
             if (parent == null || !parent.IsHandleCreated) return;
 
-            // Apply Windows Dark Theme to controls with native scrollbars
             SetWindowTheme(parent.Handle, "Explorer", null);
 
             int useDarkMode = 1;
@@ -85,14 +158,12 @@ namespace VideoEditor
 
         private void WireUpEvents()
         {
-            // Toolbar Button Clicks
             btnImport.Click += (s, e) => ImportFiles();
             btnPlayPause.Click += (s, e) => TogglePlayback();
             btnDelete.Click += (s, e) => DeleteSelectedMedia();
             btnExport.Click += async (s, e) => await ExportVideoAsync();
             btnAutoCaption.Click += btnAutoCaption_Click;
 
-            // Editing Sidebar Clicks
             btnSplit.Click += (s, e) => SplitSelectedClip();
             btnSplitLeft.Click += (s, e) => SplitLeftSelectedClip();
             btnSplitRight.Click += (s, e) => SplitRightSelectedClip();
@@ -117,13 +188,15 @@ namespace VideoEditor
                     TextData = newLabel
                 };
 
-                mediaItems.Add(textMediaItem);
-                mediaListBox.Items.Add($"Text: {newLabel.Content}");
+                // Wrap in Command
+                var command = new VideoEditor.Commands.AddMediaItemCommand(mediaItems, textMediaItem);
+                undoRedoManager.ExecuteCommand(command);
+
+                SyncListBox();
                 previewControl.SelectedTextLabel = newLabel;
                 RefreshTimeline();
             };
 
-            // Sidebar Property Change Handlers
             numFontSize.ValueChanged += (s, e) =>
             {
                 if (!isBindingUI && previewControl.SelectedTextLabel != null)
@@ -175,7 +248,6 @@ namespace VideoEditor
             cbOutEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
             numOutDuration.ValueChanged += (s, e) => SaveAnimationSettings();
 
-            // Timeline & Preview Controls Events
             timelineControl.TimeChanged += (time) =>
             {
                 previewControl.RenderFrame(mediaItems, time);
@@ -224,8 +296,6 @@ namespace VideoEditor
             };
         }
 
-        private string userApiKey = string.Empty; // Persists API key for current session
-
         private async void btnAutoCaption_Click(object sender, EventArgs e)
         {
             var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
@@ -235,12 +305,11 @@ namespace VideoEditor
                 return;
             }
 
-            // Show API Key modal input form
             using (var keyForm = new ApiKeyForm(userApiKey))
             {
                 if (keyForm.ShowDialog(this) != DialogResult.OK)
                 {
-                    return; // User canceled the dialog
+                    return;
                 }
 
                 userApiKey = keyForm.ApiKey;
@@ -252,7 +321,6 @@ namespace VideoEditor
                 btnAutoCaption.Text = "Transcribing...";
                 Cursor = Cursors.WaitCursor;
 
-                // Pass userApiKey directly to your TranscribeAudioWithGemini method
                 var captions = await captionService.TranscribeAudioWithGemini(audioItem.FilePath, userApiKey);
 
                 if (captions.Count == 0)
@@ -588,9 +656,13 @@ namespace VideoEditor
             if (isBindingUI) return;
 
             var item = timelineControl.SelectedItem;
-            if (item != null)
+            if (item != null && Math.Abs(item.Duration - (double)numDuration.Value) > 0.001)
             {
-                item.Duration = (double)numDuration.Value;
+                double newDuration = (double)numDuration.Value;
+
+                var command = new VideoEditor.Commands.ChangeDurationCommand(item, item.Duration, newDuration);
+                undoRedoManager.ExecuteCommand(command);
+
                 if (item.Type == MediaType.Image)
                 {
                     UpdateSplitEffectDurations(item);
@@ -657,8 +729,11 @@ namespace VideoEditor
                 OutEffect = new TransitionEffect { Type = "DynamicZoomBlur", Duration = halfDuration }
             };
 
-            mediaItems.Add(item);
-            mediaListBox.Items.Add(Path.GetFileName(filePath));
+            // Wrap in Command
+            var command = new VideoEditor.Commands.AddMediaItemCommand(mediaItems, item);
+            undoRedoManager.ExecuteCommand(command);
+
+            SyncListBox();
             RefreshTimeline();
         }
 
@@ -666,6 +741,12 @@ namespace VideoEditor
         {
             if (item != null)
             {
+                // Track duration change via command (captures previous original duration vs current)
+                var command = new VideoEditor.Commands.ChangeDurationCommand(item, item.OriginalDuration, item.Duration);
+                undoRedoManager.ExecuteCommand(command);
+
+                item.OriginalDuration = item.Duration; // Sync reference for subsequent resizes
+
                 if (item.Type == MediaType.Image)
                 {
                     UpdateSplitEffectDurations(item);
@@ -746,8 +827,11 @@ namespace VideoEditor
 
                 if (newItem.Type == MediaType.Image) UpdateSplitEffectDurations(newItem);
 
-                mediaItems.Add(newItem);
-                mediaListBox.Items.Add(Path.GetFileName(newItem.FilePath) ?? "Text Layer");
+                // Wrap in Command
+                var command = new VideoEditor.Commands.SplitMediaItemCommand(mediaItems, item, newItem, originalDuration);
+                undoRedoManager.ExecuteCommand(command);
+
+                SyncListBox();
                 RefreshTimeline();
             }
         }
@@ -760,13 +844,20 @@ namespace VideoEditor
             if (item != null && playhead > item.StartTime && playhead < (item.StartTime + item.Duration))
             {
                 double cutAmount = playhead - item.StartTime;
-
                 if (item.OriginalDuration <= 0) item.OriginalDuration = item.Duration;
 
-                item.SourceOffset += cutAmount;
-                item.StartTime = playhead;
-                item.Duration -= cutAmount;
+                double oldStart = item.StartTime;
+                double oldDuration = item.Duration;
+                double oldOffset = item.SourceOffset;
 
+                double newStart = playhead;
+                double newDuration = item.Duration - cutAmount;
+                double newOffset = item.SourceOffset + cutAmount;
+
+                var command = new VideoEditor.Commands.TrimMediaItemCommand(
+                    item, oldStart, newStart, oldDuration, newDuration, oldOffset, newOffset);
+
+                undoRedoManager.ExecuteCommand(command);
                 RefreshTimeline();
             }
         }
@@ -780,8 +871,18 @@ namespace VideoEditor
             {
                 if (item.OriginalDuration <= 0) item.OriginalDuration = item.Duration;
 
-                item.Duration = playhead - item.StartTime;
+                double oldStart = item.StartTime;
+                double oldDuration = item.Duration;
+                double oldOffset = item.SourceOffset;
 
+                double newStart = item.StartTime;
+                double newDuration = playhead - item.StartTime;
+                double newOffset = item.SourceOffset;
+
+                var command = new VideoEditor.Commands.TrimMediaItemCommand(
+                    item, oldStart, newStart, oldDuration, newDuration, oldOffset, newOffset);
+
+                undoRedoManager.ExecuteCommand(command);
                 RefreshTimeline();
             }
         }
@@ -790,91 +891,6 @@ namespace VideoEditor
         {
             timelineControl.Invalidate();
             previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
-        }
-
-        public void RenderPreviewAtTime(double timePosition, Graphics g, Size canvasSize)
-        {
-            g.Clear(Color.Black);
-
-            float targetAspect = 9.0f / 16.0f;
-            int canvasWidth = canvasSize.Width;
-            int canvasHeight = canvasSize.Height;
-
-            if ((float)canvasWidth / canvasHeight > targetAspect)
-            {
-                canvasWidth = (int)(canvasHeight * targetAspect);
-            }
-            else
-            {
-                canvasHeight = (int)(canvasWidth / targetAspect);
-            }
-
-            int canvasX = (canvasSize.Width - canvasWidth) / 2;
-            int canvasY = (canvasSize.Height - canvasHeight) / 2;
-
-            g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
-
-            // 1. Render Active Image Frame
-            var activeImage = mediaItems.FirstOrDefault(item => item.Type == MediaType.Image &&
-                                                                timePosition >= item.StartTime &&
-                                                                timePosition < item.StartTime + item.Duration);
-
-            if (activeImage != null && File.Exists(activeImage.FilePath))
-            {
-                using (var img = Image.FromFile(activeImage.FilePath))
-                {
-                    float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * activeImage.Scale;
-                    int baseW = (int)(img.Width * scale);
-                    int baseH = (int)(img.Height * scale);
-
-                    int originX = canvasX + (canvasWidth - baseW) / 2 + (int)activeImage.PositionX;
-                    int originY = canvasY + (canvasHeight - baseH) / 2 + (int)activeImage.PositionY;
-
-                    g.DrawImage(img, originX, originY, baseW, baseH);
-                }
-            }
-
-            // 2. Render Active Separate Text Layers on top
-            var activeTexts = mediaItems.Where(item => item.Type == MediaType.Text &&
-                                                        item.TextData != null &&
-                                                        timePosition >= item.StartTime &&
-                                                        timePosition < item.StartTime + item.Duration);
-
-            foreach (var textItem in activeTexts)
-            {
-                var label = textItem.TextData;
-
-                // Dynamically scale bounding box based on relative percentages or absolute values
-                float drawX = canvasX + (label.RelativeWidth > 0 ? label.RelativeX * canvasWidth : label.X);
-                float drawY = canvasY + (label.RelativeHeight > 0 ? label.RelativeY * canvasHeight : label.Y);
-                float drawWidth = label.RelativeWidth > 0 ? label.RelativeWidth * canvasWidth : Math.Max(label.Width, 50);
-                float drawHeight = label.RelativeHeight > 0 ? label.RelativeHeight * canvasHeight : Math.Max(label.Height, 30);
-
-                var rect = new RectangleF(drawX, drawY, drawWidth, drawHeight);
-
-                // Render background box
-                using (var bgBrush = new SolidBrush(label.BackgroundColor))
-                {
-                    g.FillRectangle(bgBrush, rect);
-                }
-
-                // Render multi-line text at size 15 with word wrapping
-                using (var font = new Font(label.FontFamily ?? "Arial", 15f, label.IsBold ? FontStyle.Bold : FontStyle.Regular))
-                using (var textBrush = new SolidBrush(label.TextColor))
-                {
-                    var sf = new StringFormat
-                    {
-                        Alignment = StringAlignment.Center,
-                        LineAlignment = StringAlignment.Center,
-                        Trimming = StringTrimming.Word,
-                        FormatFlags = 0 // Enables multi-line wrapping without clipping line breaks
-                    };
-
-                    g.DrawString(label.Content, font, textBrush, rect, sf);
-                }
-            }
-
-            g.ResetClip();
         }
 
         private void ImportFiles()
@@ -943,26 +959,6 @@ namespace VideoEditor
             catch { }
 
             return 120.0;
-        }
-
-        private void DeleteSelectedMedia()
-        {
-            var itemToDelete = timelineControl.SelectedItem;
-            if (itemToDelete != null)
-            {
-                mediaItems.Remove(itemToDelete);
-                mediaListBox.Items.Remove(Path.GetFileName(itemToDelete.FilePath) ?? "Text Layer");
-                timelineControl.Invalidate();
-                previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
-            }
-            else if (mediaListBox.SelectedIndex >= 0)
-            {
-                int idx = mediaListBox.SelectedIndex;
-                mediaItems.RemoveAt(idx);
-                mediaListBox.Items.RemoveAt(idx);
-                timelineControl.Invalidate();
-                previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
-            }
         }
     }
 

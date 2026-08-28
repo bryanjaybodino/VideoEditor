@@ -54,7 +54,33 @@ namespace VideoEditor.Controls
             this.MouseUp += PreviewControl_MouseUp;
             this.MouseWheel += PreviewControl_MouseWheel;
         }
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            // Handle Delete key when a text label or item is selected in preview
+            if (keyData == Keys.Delete)
+            {
+                if (SelectedTextLabel != null || SelectedItem != null)
+                {
+                    // Trigger deletion through parent form
+                    if (this.FindForm() is MainForm mainForm)
+                    {
+                        // Deletes active selection
+                        SelectedItem = null;
+                        SelectedTextLabel = null;
+                        this.Invalidate();
+                    }
+                    return true;
+                }
+            }
 
+            // Pass Ctrl+Z and Ctrl+Y down to the main window
+            if (keyData == (Keys.Control | Keys.Z) || keyData == (Keys.Control | Keys.Y))
+            {
+                return false; // Allows MainForm.ProcessCmdKey to capture the command
+            }
+
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
         protected override bool IsInputKey(Keys keyData)
         {
             if (SelectedTextLabel != null) return true;
