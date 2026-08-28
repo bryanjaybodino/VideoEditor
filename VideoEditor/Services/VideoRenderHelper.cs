@@ -11,6 +11,31 @@ namespace VideoEditor.Services
 {
     public static class VideoRenderHelper
     {
+        private static readonly Dictionary<string, byte[]> ImageByteCache = new Dictionary<string, byte[]>();
+        private static readonly object CacheLock = new object();
+
+        public static Image GetCachedImage(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+                return null;
+
+            byte[] bytes;
+
+            lock (CacheLock)
+            {
+                if (!ImageByteCache.TryGetValue(filePath, out bytes))
+                {
+                    bytes = File.ReadAllBytes(filePath);
+                    ImageByteCache[filePath] = bytes;
+                }
+            }
+
+            // Creating a MemoryStream copy prevents file lock & GDI+ thread conflicts
+            using (var ms = new MemoryStream(bytes))
+            {
+                return Image.FromStream(ms);
+            }
+        }
         public static void DrawImageItem(Graphics g, Image img, MediaItem item, double currentTime, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
         {
             if (img == null || item == null) return;
@@ -124,66 +149,52 @@ namespace VideoEditor.Services
 
             if (!underlyingImages.Any()) return;
 
-            // 1. Moderate downscale (1/4th) keeps crisp gradient details without pixelation
-            int scale = 4;
-            int smallW = Math.Max(1, blurRect.Width / scale);
-            int smallH = Math.Max(1, blurRect.Height / scale);
+            // Fast 1/16th scale resampling (Bypasses slow CPU memory loops)
+            int tinyW = Math.Max(4, blurRect.Width / 16);
+            int tinyH = Math.Max(4, blurRect.Height / 16);
 
-            using (Bitmap highResRegion = new Bitmap(blurRect.Width, blurRect.Height, PixelFormat.Format32bppArgb))
+            using (Bitmap tinyBmp = new Bitmap(tinyW, tinyH, PixelFormat.Format32bppArgb))
             {
-                using (Graphics regG = Graphics.FromImage(highResRegion))
+                using (Graphics tinyG = Graphics.FromImage(tinyBmp))
                 {
-                    regG.SmoothingMode = SmoothingMode.HighQuality;
-                    regG.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    regG.Clear(Color.Black);
+                    tinyG.SmoothingMode = SmoothingMode.HighSpeed;
+                    tinyG.InterpolationMode = InterpolationMode.Low;
+                    tinyG.Clear(Color.Black);
 
-                    regG.TranslateTransform(-blurRect.X, -blurRect.Y);
+                    float scaleX = (float)tinyW / blurRect.Width;
+                    float scaleY = (float)tinyH / blurRect.Height;
+                    tinyG.ScaleTransform(scaleX, scaleY);
+                    tinyG.TranslateTransform(-blurRect.X, -blurRect.Y);
 
                     foreach (var item in underlyingImages)
                     {
-                        if (!string.IsNullOrEmpty(item.FilePath) && File.Exists(item.FilePath))
+                        var img = GetCachedImage(item.FilePath);
+                        if (img != null)
                         {
-                            using (var img = Image.FromFile(item.FilePath))
-                            {
-                                DrawImageItem(regG, img, item, currentTime, canvasX, canvasY, canvasWidth, canvasHeight);
-                            }
+                            DrawImageItem(tinyG, img, item, currentTime, canvasX, canvasY, canvasWidth, canvasHeight);
                         }
                     }
                 }
 
-                using (Bitmap smallBmp = new Bitmap(smallW, smallH, PixelFormat.Format32bppArgb))
+                using (var attr = new ImageAttributes())
                 {
-                    using (Graphics smallG = Graphics.FromImage(smallBmp))
-                    {
-                        smallG.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        smallG.DrawImage(highResRegion, 0, 0, smallW, smallH);
-                    }
+                    attr.SetWrapMode(WrapMode.TileFlipXY);
 
-                    // 2. Multi-pass box blur creates a smooth Gaussian-like curve
-                    int blurRadius = (blur.BlurRadius > 0 ? blur.BlurRadius : 25) / scale;
-                    ApplyMultiPassBlur(smallBmp, Math.Max(3, blurRadius), passes: 3);
+                    GraphicsState state = g.Save();
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
-                    // 3. Upscale back to canvas with smooth edge attributes
-                    using (var attr = new System.Drawing.Imaging.ImageAttributes())
-                    {
-                        attr.SetWrapMode(WrapMode.TileFlipXY);
+                    Rectangle targetRect = new Rectangle(blurRect.X, blurRect.Y, blurRect.Width + 1, blurRect.Height + 1);
 
-                        GraphicsState state = g.Save();
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.DrawImage(
+                        tinyBmp,
+                        targetRect,
+                        0, 0, tinyBmp.Width, tinyBmp.Height,
+                        GraphicsUnit.Pixel,
+                        attr
+                    );
 
-                        Rectangle targetRect = new Rectangle(blurRect.X, blurRect.Y, blurRect.Width + 1, blurRect.Height + 1);
-
-                        g.DrawImage(
-                            smallBmp,
-                            targetRect,
-                            0, 0, smallBmp.Width, smallBmp.Height,
-                            GraphicsUnit.Pixel,
-                            attr
-                        );
-
-                        g.Restore(state);
-                    }
+                    g.Restore(state);
                 }
             }
         }
@@ -289,7 +300,7 @@ namespace VideoEditor.Services
                     {
                         if (File.Exists(item.FilePath))
                         {
-                            using var img = Image.FromFile(item.FilePath);
+                            using var img = GetCachedImage(item.FilePath);
                             DrawImageItem(g, img, item, currentTime, 0, 0, canvasWidth, canvasHeight);
                         }
 

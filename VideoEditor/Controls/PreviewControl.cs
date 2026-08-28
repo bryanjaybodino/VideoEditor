@@ -139,7 +139,7 @@ namespace VideoEditor.Controls
             {
                 if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath) && !imageCache.ContainsKey(item.FilePath) && File.Exists(item.FilePath))
                 {
-                    using (var temp = Image.FromFile(item.FilePath))
+                    using (var temp = VideoRenderHelper.GetCachedImage(item.FilePath))
                     {
                         imageCache[item.FilePath] = new Bitmap(temp);
                     }
