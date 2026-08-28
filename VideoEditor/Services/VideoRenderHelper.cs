@@ -98,7 +98,8 @@ namespace VideoEditor.Services
             g.DrawImage(img, bounds, 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attr);
         }
 
-        // Inside VideoRenderHelper.cs
+
+
         public static void DrawBlurOverlay(Graphics g, BlurOverlay blur, List<MediaItem> allItems, double currentTime, int canvasX, int canvasY, int canvasWidth, int canvasHeight, int blurTrackIndex)
         {
             if (blur == null) return;
@@ -113,23 +114,30 @@ namespace VideoEditor.Services
 
             if (blurRect.Width <= 0 || blurRect.Height <= 0) return;
 
-            using (Bitmap region = new Bitmap(blurRect.Width, blurRect.Height, PixelFormat.Format32bppArgb))
+            var underlyingImages = allItems
+                .Where(i => i.Type == MediaType.Image &&
+                            i.TrackIndex > blurTrackIndex &&
+                            currentTime >= i.StartTime &&
+                            currentTime < i.StartTime + i.Duration)
+                .OrderByDescending(i => i.TrackIndex)
+                .ToList();
+
+            if (!underlyingImages.Any()) return;
+
+            // 1. Moderate downscale (1/4th) keeps crisp gradient details without pixelation
+            int scale = 4;
+            int smallW = Math.Max(1, blurRect.Width / scale);
+            int smallH = Math.Max(1, blurRect.Height / scale);
+
+            using (Bitmap highResRegion = new Bitmap(blurRect.Width, blurRect.Height, PixelFormat.Format32bppArgb))
             {
-                using (Graphics regG = Graphics.FromImage(region))
+                using (Graphics regG = Graphics.FromImage(highResRegion))
                 {
-                    regG.SmoothingMode = SmoothingMode.AntiAlias;
+                    regG.SmoothingMode = SmoothingMode.HighQuality;
                     regG.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     regG.Clear(Color.Black);
 
                     regG.TranslateTransform(-blurRect.X, -blurRect.Y);
-
-                    // Filter images that exist strictly UNDERNEATH this blur overlay (higher track index)
-                    var underlyingImages = allItems
-                        .Where(i => i.Type == MediaType.Image &&
-                                    i.TrackIndex > blurTrackIndex &&
-                                    currentTime >= i.StartTime &&
-                                    currentTime < i.StartTime + i.Duration)
-                        .OrderByDescending(i => i.TrackIndex);
 
                     foreach (var item in underlyingImages)
                     {
@@ -143,64 +151,121 @@ namespace VideoEditor.Services
                     }
                 }
 
-                ApplyBoxBlur(region, blur.BlurRadius > 0 ? blur.BlurRadius : 15);
-                g.DrawImage(region, blurRect.Location);
+                using (Bitmap smallBmp = new Bitmap(smallW, smallH, PixelFormat.Format32bppArgb))
+                {
+                    using (Graphics smallG = Graphics.FromImage(smallBmp))
+                    {
+                        smallG.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        smallG.DrawImage(highResRegion, 0, 0, smallW, smallH);
+                    }
+
+                    // 2. Multi-pass box blur creates a smooth Gaussian-like curve
+                    int blurRadius = (blur.BlurRadius > 0 ? blur.BlurRadius : 25) / scale;
+                    ApplyMultiPassBlur(smallBmp, Math.Max(3, blurRadius), passes: 3);
+
+                    // 3. Upscale back to canvas with smooth edge attributes
+                    using (var attr = new System.Drawing.Imaging.ImageAttributes())
+                    {
+                        attr.SetWrapMode(WrapMode.TileFlipXY);
+
+                        GraphicsState state = g.Save();
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+                        Rectangle targetRect = new Rectangle(blurRect.X, blurRect.Y, blurRect.Width + 1, blurRect.Height + 1);
+
+                        g.DrawImage(
+                            smallBmp,
+                            targetRect,
+                            0, 0, smallBmp.Width, smallBmp.Height,
+                            GraphicsUnit.Pixel,
+                            attr
+                        );
+
+                        g.Restore(state);
+                    }
+                }
             }
         }
 
-        // Fast box blur algorithm operating directly on bitmap memory
-        private static void ApplyBoxBlur(Bitmap bmp, int radius)
+        private static void ApplyMultiPassBlur(Bitmap bmp, int radius, int passes)
         {
             Rectangle rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
             BitmapData bmpData = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
 
             IntPtr ptr = bmpData.Scan0;
             int bytes = Math.Abs(bmpData.Stride) * bmp.Height;
-            byte[] rgbValues = new byte[bytes];
-            System.Runtime.InteropServices.Marshal.Copy(ptr, rgbValues, 0, bytes);
+            byte[] src = new byte[bytes];
+            byte[] dst = new byte[bytes];
+
+            System.Runtime.InteropServices.Marshal.Copy(ptr, src, 0, bytes);
 
             int w = bmp.Width;
             int h = bmp.Height;
             int stride = bmpData.Stride;
 
-            // Horizontal & Vertical box blur passes
-            for (int pass = 0; pass < 2; pass++)
+            for (int p = 0; p < passes; p++)
             {
+                // Horizontal Pass
                 for (int y = 0; y < h; y++)
                 {
+                    int rowOffset = y * stride;
                     for (int x = 0; x < w; x++)
                     {
-                        int rSum = 0, gSum = 0, bSum = 0, count = 0;
+                        int rSum = 0, gSum = 0, bSum = 0, aSum = 0, count = 0;
 
-                        for (int k = -radius; k <= radius; k += 2)
+                        for (int k = -radius; k <= radius; k++)
                         {
                             int px = Math.Clamp(x + k, 0, w - 1);
-                            int idx = (y * stride) + (px * 4);
+                            int idx = rowOffset + (px * 4);
 
-                            bSum += rgbValues[idx];
-                            gSum += rgbValues[idx + 1];
-                            rSum += rgbValues[idx + 2];
+                            bSum += src[idx];
+                            gSum += src[idx + 1];
+                            rSum += src[idx + 2];
+                            aSum += src[idx + 3];
                             count++;
                         }
 
-                        int currentIdx = (y * stride) + (x * 4);
-                        rgbValues[currentIdx] = (byte)(bSum / count);
-                        rgbValues[currentIdx + 1] = (byte)(gSum / count);
-                        rgbValues[currentIdx + 2] = (byte)(rSum / count);
+                        int outIdx = rowOffset + (x * 4);
+                        dst[outIdx] = (byte)(bSum / count);
+                        dst[outIdx + 1] = (byte)(gSum / count);
+                        dst[outIdx + 2] = (byte)(rSum / count);
+                        dst[outIdx + 3] = (byte)(aSum / count);
+                    }
+                }
+
+                // Vertical Pass
+                for (int y = 0; y < h; y++)
+                {
+                    int rowOffset = y * stride;
+                    for (int x = 0; x < w; x++)
+                    {
+                        int rSum = 0, gSum = 0, bSum = 0, aSum = 0, count = 0;
+
+                        for (int k = -radius; k <= radius; k++)
+                        {
+                            int py = Math.Clamp(y + k, 0, h - 1);
+                            int idx = (py * stride) + (x * 4);
+
+                            bSum += dst[idx];
+                            gSum += dst[idx + 1];
+                            rSum += dst[idx + 2];
+                            aSum += dst[idx + 3];
+                            count++;
+                        }
+
+                        int outIdx = rowOffset + (x * 4);
+                        src[outIdx] = (byte)(bSum / count);
+                        src[outIdx + 1] = (byte)(gSum / count);
+                        src[outIdx + 2] = (byte)(rSum / count);
+                        src[outIdx + 3] = (byte)(aSum / count);
                     }
                 }
             }
 
-            System.Runtime.InteropServices.Marshal.Copy(rgbValues, 0, ptr, bytes);
+            System.Runtime.InteropServices.Marshal.Copy(src, 0, ptr, bytes);
             bmp.UnlockBits(bmpData);
         }
-
-        private static Bitmap GetCanvasBitmap(Graphics g)
-        {
-            // Native handle bitmap fallback
-            return new Bitmap((int)g.VisibleClipBounds.Width, (int)g.VisibleClipBounds.Height, g);
-        }
-
         public static Bitmap RenderExportFrame(List<MediaItem> allItems, double currentTime, int canvasWidth = 1080, int canvasHeight = 1920)
         {
             Bitmap frame = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format32bppArgb);
