@@ -46,7 +46,7 @@ namespace VideoEditor
         private bool isBindingUI = false;
         private UndoRedoManager undoRedoManager = new UndoRedoManager();
         private string userApiKey = string.Empty;
-
+        private MediaItem currentPlayingAudioItem = null;
         public MainForm()
         {
             exportService = new VideoExportService();
@@ -414,6 +414,9 @@ namespace VideoEditor
                 double elapsedSecs = playbackStopwatch.Elapsed.TotalSeconds;
                 timelineControl.CurrentTime = playbackStartOffset + elapsedSecs;
 
+                // Synchronize audio state on every tick to enforce clip boundaries
+                ApplyAudioSeek(timelineControl.CurrentTime);
+
                 if (timelineControl.CurrentTime >= timelineControl.GetTotalDuration())
                 {
                     PausePlayback();
@@ -445,14 +448,19 @@ namespace VideoEditor
 
         private void ApplyAudioSeek(double timePosition)
         {
-            var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
-            if (audioItem != null && File.Exists(audioItem.FilePath))
-            {
-                EnsureAudioLoaded(audioItem.FilePath);
+            var activeAudioItem = mediaItems.FirstOrDefault(x =>
+                x.Type == MediaType.Audio &&
+                timePosition >= x.StartTime &&
+                timePosition < (x.StartTime + x.Duration));
 
-                if (timePosition >= audioItem.StartTime && timePosition < (audioItem.StartTime + audioItem.Duration))
+            if (activeAudioItem != null && File.Exists(activeAudioItem.FilePath))
+            {
+                // If transitioning to a new clip or seeking, update the player
+                if (currentPlayingAudioItem != activeAudioItem || Math.Abs(audioPlayer.Position.TotalSeconds - ((timePosition - activeAudioItem.StartTime) + activeAudioItem.SourceOffset)) > 0.2)
                 {
-                    double relativeSecs = (timePosition - audioItem.StartTime) + audioItem.SourceOffset;
+                    EnsureAudioLoaded(activeAudioItem.FilePath);
+
+                    double relativeSecs = (timePosition - activeAudioItem.StartTime) + activeAudioItem.SourceOffset;
                     audioPlayer.Position = TimeSpan.FromSeconds(Math.Max(0, relativeSecs));
 
                     if (isPlaying)
@@ -460,13 +468,19 @@ namespace VideoEditor
                         audioPlayer.Play();
                     }
                 }
-                else
+                currentPlayingAudioItem = activeAudioItem;
+            }
+            else
+            {
+                // Pause audio if playhead moves outside active audio boundaries
+                try
                 {
                     audioPlayer.Pause();
                 }
+                catch { }
+                currentPlayingAudioItem = null;
             }
         }
-
         private void StartPlayback()
         {
             playbackStartOffset = timelineControl.CurrentTime;
@@ -811,31 +825,49 @@ namespace VideoEditor
                 double splitPointRelative = playhead - item.StartTime;
                 double originalDuration = item.Duration;
 
+                // Update left clip parameters
+                double oldLeftDuration = item.Duration;
                 item.Duration = splitPointRelative;
                 if (item.Type == MediaType.Image) UpdateSplitEffectDurations(item);
 
+                // Create right clip parameters
                 var newItem = new MediaItem
                 {
                     FilePath = item.FilePath,
                     Type = item.Type,
                     StartTime = playhead,
                     Duration = originalDuration - splitPointRelative,
+                    OriginalDuration = item.OriginalDuration,
+                    SourceOffset = item.SourceOffset + splitPointRelative, // Audio offset shifts forward
+                    AudioPeaks = item.AudioPeaks,
                     InEffect = item.InEffect != null ? new TransitionEffect { Type = item.InEffect.Type } : null,
                     OutEffect = item.OutEffect != null ? new TransitionEffect { Type = item.OutEffect.Type } : null,
-                    TextData = item.TextData != null ? new TextLabel { Content = item.TextData.Content, X = item.TextData.X, Y = item.TextData.Y, Width = item.TextData.Width, Height = item.TextData.Height, FontSize = item.TextData.FontSize, TextColor = item.TextData.TextColor, BackgroundColor = item.TextData.BackgroundColor } : null
+                    TextData = item.TextData != null ? new TextLabel
+                    {
+                        Content = item.TextData.Content,
+                        X = item.TextData.X,
+                        Y = item.TextData.Y,
+                        Width = item.TextData.Width,
+                        Height = item.TextData.Height,
+                        FontSize = item.TextData.FontSize,
+                        TextColor = item.TextData.TextColor,
+                        BackgroundColor = item.TextData.BackgroundColor
+                    } : null
                 };
 
                 if (newItem.Type == MediaType.Image) UpdateSplitEffectDurations(newItem);
 
-                // Wrap in Command
+                // Execute split command
                 var command = new VideoEditor.Commands.SplitMediaItemCommand(mediaItems, item, newItem, originalDuration);
                 undoRedoManager.ExecuteCommand(command);
+
+                // Re-evaluate audio engine position to force immediate sync/stop
+                ApplyAudioSeek(timelineControl.CurrentTime);
 
                 SyncListBox();
                 RefreshTimeline();
             }
         }
-
         private void SplitLeftSelectedClip()
         {
             var item = timelineControl.SelectedItem;
