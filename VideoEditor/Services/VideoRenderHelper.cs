@@ -132,6 +132,7 @@ namespace VideoEditor.Services
         {
             if (label == null || string.IsNullOrEmpty(label.Content)) return;
 
+            // Calculate relative bounding rect based on canvas dimensions
             RectangleF rect = new RectangleF(
                 canvasX + (label.RelativeX * canvasWidth),
                 canvasY + (label.RelativeY * canvasHeight),
@@ -139,16 +140,20 @@ namespace VideoEditor.Services
                 Math.Max(label.RelativeHeight * canvasHeight, 30)
             );
 
-            // 1. Fill the background rectangle
+            // 1. Fill background
             using (var bgBrush = new SolidBrush(label.BackgroundColor))
             {
                 g.FillRectangle(bgBrush, rect);
             }
 
-            // 2. Draw the text content
+            // 2. Scale font size dynamically relative to 1080x1920 base canvas
+            float baseFontSize = label.FontSize > 0 ? label.FontSize : 15f;
+            float scaleFactor = (float)canvasHeight / 1920f;
+            float scaledFontSize = Math.Max(baseFontSize * scaleFactor, 8f);
+
             using var font = new Font(
                 !string.IsNullOrEmpty(label.FontFamily) ? label.FontFamily : "Segoe UI",
-                label.FontSize > 0 ? label.FontSize : 16f,
+                scaledFontSize,
                 label.IsBold ? FontStyle.Bold : FontStyle.Regular
             );
             using var textBrush = new SolidBrush(label.TextColor);
