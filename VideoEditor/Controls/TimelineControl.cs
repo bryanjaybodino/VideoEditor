@@ -31,7 +31,7 @@ namespace VideoEditor.Controls
         private const int trackHeight = 45;
         private const int trackMargin = 5;
         private const int scrollBarSize = 18;
-
+        public int SelectedTrackIndex { get; private set; } = 0;
         private bool isDraggingPlayhead = false;
         private bool isDraggingClip = false;
         private bool isResizingClip = false;
@@ -176,8 +176,30 @@ namespace VideoEditor.Controls
                 int trackY = GetTrackY(i, MediaType.Image);
                 if (trackY + trackHeight < headerHeight || trackY > this.Height) continue;
 
-                g.FillRectangle(new SolidBrush(Color.FromArgb(30, 30, 30)), 0, trackY, this.Width, trackHeight);
-                g.DrawString($"Row {i + 1}", this.Font, Brushes.DimGray, 5, trackY + 2);
+                bool isRowSelected = (i == SelectedTrackIndex);
+
+                // Fill row background (Highlighted accent color vs Default dark grey)
+                Color rowBgColor = isRowSelected
+                    ? Color.FromArgb(45, 55, 75)   // Active row highlight color
+                    : Color.FromArgb(30, 30, 30);  // Normal dark background
+
+                using (var bgBrush = new SolidBrush(rowBgColor))
+                {
+                    g.FillRectangle(bgBrush, 0, trackY, this.Width, trackHeight);
+                }
+
+                // Draw active row outline border
+                if (isRowSelected)
+                {
+                    using (var borderPen = new Pen(Color.FromArgb(0, 122, 204), 1.5f)) // Accent blue border
+                    {
+                        g.DrawRectangle(borderPen, 0, trackY, this.Width - 1, trackHeight);
+                    }
+                }
+
+                // Draw row label with highlighted text color
+                Brush textBrush = isRowSelected ? Brushes.LightCyan : Brushes.DimGray;
+                g.DrawString($"Row {i + 1}", this.Font, textBrush, 5, trackY + 2);
             }
 
             int audioY = GetTrackY(0, MediaType.Audio);
@@ -324,6 +346,9 @@ namespace VideoEditor.Controls
                 return;
             }
 
+            // Always update SelectedTrackIndex first based on mouse click position
+            SelectedTrackIndex = GetTrackIndexFromY(e.Y, MediaType.Image);
+
             SelectedItem = null;
             foreach (var item in mediaItems)
             {
@@ -335,6 +360,7 @@ namespace VideoEditor.Controls
                 if (rect.Contains(e.Location))
                 {
                     SelectedItem = item;
+                    SelectedTrackIndex = item.TrackIndex; // Sync track index if a clip is clicked
                     ClipSelected?.Invoke(item);
                     activeClip = item;
 
@@ -349,8 +375,10 @@ namespace VideoEditor.Controls
                 }
             }
 
+            // Clicking an empty row clears clip selection but keeps SelectedTrackIndex active
             ClipSelected?.Invoke(null);
             CurrentTime = (e.X + scrollX) / pixelsPerSecond;
+            this.Invalidate(); // Refresh timeline to render empty row highlight
         }
 
         private void Timeline_MouseMove(object sender, MouseEventArgs e)

@@ -188,10 +188,10 @@ namespace VideoEditor
                     Type = MediaType.Text,
                     StartTime = timelineControl.CurrentTime,
                     Duration = 3.0,
+                    TrackIndex = timelineControl.SelectedTrackIndex, // Strictly use SelectedTrackIndex
                     TextData = newLabel
                 };
 
-                // Wrap in Command
                 var command = new VideoEditor.Commands.AddMediaItemCommand(mediaItems, textMediaItem);
                 undoRedoManager.ExecuteCommand(command);
 
@@ -229,7 +229,7 @@ namespace VideoEditor
                     Type = MediaType.Blur,
                     StartTime = timelineControl.CurrentTime,
                     Duration = 3.0,
-                    TrackIndex = 1, // Drag & drop to any track row on timeline
+                    TrackIndex = timelineControl.SelectedTrackIndex, // Use SelectedTrackIndex instead of hardcoded 1
                     BlurData = newBlur
                 };
 
@@ -762,7 +762,7 @@ namespace VideoEditor
             }
         }
 
-        private void AddMediaItem(string filePath, MediaType type)
+        private void AddMediaItem(string filePath, MediaType type, int targetTrack = 0)
         {
             double duration = 4.0;
             double nextStartTime = 0;
@@ -775,7 +775,8 @@ namespace VideoEditor
             }
             else if (type == MediaType.Image)
             {
-                var lastImage = mediaItems.Where(x => x.Type == MediaType.Image).LastOrDefault();
+                // Find last image on the specified track
+                var lastImage = mediaItems.Where(x => x.Type == MediaType.Image && x.TrackIndex == targetTrack).LastOrDefault();
                 if (lastImage != null) nextStartTime = lastImage.StartTime + lastImage.Duration;
             }
 
@@ -789,12 +790,12 @@ namespace VideoEditor
                 OriginalDuration = duration,
                 SourceOffset = 0,
                 StartTime = nextStartTime,
+                TrackIndex = targetTrack, // Assign target track
                 AudioPeaks = audioPeaks,
                 InEffect = new TransitionEffect { Type = "DynamicZoomBlur", Duration = halfDuration },
                 OutEffect = new TransitionEffect { Type = "DynamicZoomBlur", Duration = halfDuration }
             };
 
-            // Wrap in Command
             var command = new VideoEditor.Commands.AddMediaItemCommand(mediaItems, item);
             undoRedoManager.ExecuteCommand(command);
 
@@ -992,7 +993,7 @@ namespace VideoEditor
 
                         if (new[] { ".jpg", ".jpeg", ".png", ".bmp" }.Contains(ext))
                         {
-                            AddMediaItem(file, MediaType.Image);
+                            AddMediaItem(file, MediaType.Image, timelineControl.SelectedTrackIndex);
                         }
                         else if (new[] { ".mp3", ".wav", ".m4a" }.Contains(ext))
                         {
