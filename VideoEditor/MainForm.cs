@@ -224,6 +224,8 @@ namespace VideoEditor
             };
         }
 
+        private string userApiKey = string.Empty; // Persists API key for current session
+
         private async void btnAutoCaption_Click(object sender, EventArgs e)
         {
             var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
@@ -233,13 +235,25 @@ namespace VideoEditor
                 return;
             }
 
+            // Show API Key modal input form
+            using (var keyForm = new ApiKeyForm(userApiKey))
+            {
+                if (keyForm.ShowDialog(this) != DialogResult.OK)
+                {
+                    return; // User canceled the dialog
+                }
+
+                userApiKey = keyForm.ApiKey;
+            }
+
             try
             {
                 btnAutoCaption.Enabled = false;
                 btnAutoCaption.Text = "Transcribing...";
                 Cursor = Cursors.WaitCursor;
 
-                var captions = await captionService.TranscribeAudioWithGemini(audioItem.FilePath);
+                // Pass userApiKey directly to your TranscribeAudioWithGemini method
+                var captions = await captionService.TranscribeAudioWithGemini(audioItem.FilePath, userApiKey);
 
                 if (captions.Count == 0)
                 {

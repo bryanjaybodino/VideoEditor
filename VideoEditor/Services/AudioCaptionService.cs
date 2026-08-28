@@ -14,10 +14,7 @@ namespace VideoEditor.Services
     {
         private static readonly HttpClient httpClient = new HttpClient();
 
-        // Environment variable or your active Gemini API key
-        private static string ApiKey => Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "AQ.Ab8RN6I-K5DLkrztPPuzv9aM8Ij4MgutRAcZAblJ6iNsXklcIw";
-
-        public async Task<List<Caption>> TranscribeAudioWithGemini(string audioFilePath)
+        public async Task<List<Caption>> TranscribeAudioWithGemini(string audioFilePath,string ApiKey)
         {
             if (!File.Exists(audioFilePath))
             {
@@ -146,7 +143,7 @@ namespace VideoEditor.Services
                     Width = 972f,     // 90% of 1080
                     Height = 480f,    // 25% of 1920
 
-                    FontSize = 15f,   // Set to 15
+                    FontSize = 30f,   // Set to 30
                     TextColor = System.Drawing.Color.White,
                     BackgroundColor = System.Drawing.Color.FromArgb(180, 0, 0, 0),
                     IsBold = true
