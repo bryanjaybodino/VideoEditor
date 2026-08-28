@@ -90,6 +90,7 @@ namespace VideoEditor
             btnPlayPause.Click += (s, e) => TogglePlayback();
             btnDelete.Click += (s, e) => DeleteSelectedMedia();
             btnExport.Click += async (s, e) => await ExportVideoAsync();
+            btnAutoCaption.Click += btnAutoCaption_Click;
 
             // Editing Sidebar Clicks
             btnSplit.Click += (s, e) => SplitSelectedClip();
@@ -221,6 +222,48 @@ namespace VideoEditor
                 scrubAudioTimer.Stop();
                 ApplyAudioSeek(timelineControl.CurrentTime);
             };
+        }
+
+        private async void btnAutoCaption_Click(object sender, EventArgs e)
+        {
+            var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
+            if (audioItem == null || !File.Exists(audioItem.FilePath))
+            {
+                MessageBox.Show("Please import an audio file to the timeline first.", "No Audio Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                btnAutoCaption.Enabled = false;
+                btnAutoCaption.Text = "Transcribing...";
+                Cursor = Cursors.WaitCursor;
+
+                var captions = await captionService.TranscribeAudioWithGemini(audioItem.FilePath);
+
+                if (captions.Count == 0)
+                {
+                    MessageBox.Show("No speech was detected in the audio file.", "Caption Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                captionService.AddCaptionsToMedia(captions, mediaItems);
+
+                RefreshTimeline();
+                previewControl.Invalidate();
+
+                MessageBox.Show($"Successfully added {captions.Count} auto-captions to the timeline!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to generate captions:\n{ex.Message}", "Caption Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                btnAutoCaption.Enabled = true;
+                btnAutoCaption.Text = "Auto Caption";
+                Cursor = Cursors.Default;
+            }
         }
 
         private void PickColor(Color initialColor, Action<Color> onColorPicked)
@@ -786,24 +829,33 @@ namespace VideoEditor
             foreach (var textItem in activeTexts)
             {
                 var label = textItem.TextData;
-                float drawX = canvasX + label.X;
-                float drawY = canvasY + label.Y;
-                var rect = new RectangleF(drawX, drawY, Math.Max(label.Width, 50), Math.Max(label.Height, 30));
 
+                // Dynamically scale bounding box based on relative percentages or absolute values
+                float drawX = canvasX + (label.RelativeWidth > 0 ? label.RelativeX * canvasWidth : label.X);
+                float drawY = canvasY + (label.RelativeHeight > 0 ? label.RelativeY * canvasHeight : label.Y);
+                float drawWidth = label.RelativeWidth > 0 ? label.RelativeWidth * canvasWidth : Math.Max(label.Width, 50);
+                float drawHeight = label.RelativeHeight > 0 ? label.RelativeHeight * canvasHeight : Math.Max(label.Height, 30);
+
+                var rect = new RectangleF(drawX, drawY, drawWidth, drawHeight);
+
+                // Render background box
                 using (var bgBrush = new SolidBrush(label.BackgroundColor))
                 {
                     g.FillRectangle(bgBrush, rect);
                 }
 
-                using (var font = new Font(label.FontFamily, label.FontSize, label.IsBold ? FontStyle.Bold : FontStyle.Regular))
+                // Render multi-line text at size 15 with word wrapping
+                using (var font = new Font(label.FontFamily ?? "Arial", 15f, label.IsBold ? FontStyle.Bold : FontStyle.Regular))
                 using (var textBrush = new SolidBrush(label.TextColor))
                 {
                     var sf = new StringFormat
                     {
                         Alignment = StringAlignment.Center,
                         LineAlignment = StringAlignment.Center,
-                        Trimming = StringTrimming.Word
+                        Trimming = StringTrimming.Word,
+                        FormatFlags = 0 // Enables multi-line wrapping without clipping line breaks
                     };
+
                     g.DrawString(label.Content, font, textBrush, rect, sf);
                 }
             }
