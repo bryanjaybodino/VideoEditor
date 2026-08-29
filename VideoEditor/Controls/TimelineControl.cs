@@ -113,6 +113,84 @@ namespace VideoEditor.Controls
             this.TabStop = true;
         }
 
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            // Extract key code without modifiers
+            Keys keyCode = keyData & Keys.KeyCode;
+
+            if (keyCode == Keys.Left || keyCode == Keys.Right || keyCode == Keys.Up || keyCode == Keys.Down)
+            {
+                // Adjust movement speed: Shift increases horizontal step time
+                double timeStep = (keyData & Keys.Shift) == Keys.Shift ? 0.5 : 0.1; // in seconds
+                int trackDelta = 0;
+                double timeDelta = 0;
+
+                switch (keyCode)
+                {
+                    case Keys.Left: timeDelta = -timeStep; break;
+                    case Keys.Right: timeDelta = timeStep; break;
+                    case Keys.Up: trackDelta = -1; break;
+                    case Keys.Down: trackDelta = 1; break;
+                }
+
+                if (NudgeSelectedClips(timeDelta, trackDelta))
+                {
+                    return true; // Key handled
+                }
+            }
+
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+        private bool NudgeSelectedClips(double timeDelta, int trackDelta)
+        {
+            if (selectedItems.Count == 0) return false;
+
+            var moves = new List<(MediaItem Item, double OldStart, double NewStart, int OldTrack, int NewTrack)>();
+
+            foreach (var item in selectedItems)
+            {
+                if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio)
+                    continue;
+
+                double oldStart = item.StartTime;
+                double newStart = Math.Max(0, oldStart + timeDelta);
+
+                int oldTrack = item.TrackIndex;
+                int newTrack = oldTrack;
+
+                // Apply track movement only for visual items (Audio stays on audio track)
+                if (item.Type == MediaType.Image || item.Type == MediaType.Text || item.Type == MediaType.Blur)
+                {
+                    newTrack = Math.Max(0, oldTrack + trackDelta);
+                    if (lockedTracks.Contains(newTrack))
+                    {
+                        newTrack = oldTrack; // Skip moving to a locked track
+                    }
+                }
+
+                if (Math.Abs(newStart - oldStart) > 0.0001 || newTrack != oldTrack)
+                {
+                    item.StartTime = newStart;
+                    item.TrackIndex = newTrack;
+                    moves.Add((item, oldStart, newStart, oldTrack, newTrack));
+                }
+            }
+
+            if (moves.Count > 0)
+            {
+                var cmd = new MoveClipCommand(moves);
+                UndoRedoManager?.ExecuteCommand(cmd);
+
+                UpdateScrollBars();
+                NotifySelectionChanged();
+                this.Invalidate();
+                return true;
+            }
+
+            return false;
+        }
+
         private void ApplyDarkModeScrollbars()
         {
             if (hScrollBar.IsHandleCreated) SetWindowTheme(hScrollBar.Handle, "DarkMode_Explorer", null);

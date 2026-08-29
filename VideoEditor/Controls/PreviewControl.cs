@@ -74,6 +74,36 @@ namespace VideoEditor.Controls
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            // Check if an arrow key was pressed (extracting key without modifiers)
+            Keys keyCode = keyData & Keys.KeyCode;
+
+            if (keyCode == Keys.Up || keyCode == Keys.Down || keyCode == Keys.Left || keyCode == Keys.Right)
+            {
+                // Don't intercept arrow keys if actively typing inside a text label
+                if (SelectedTextLabel != null && this.Focused)
+                {
+                    // Allow arrow navigation within text unless CTRL or SHIFT moves the whole object
+                }
+
+                // Shift key increases step size from 2 units to 10 units
+                int step = (keyData & Keys.Shift) == Keys.Shift ? 10 : 2;
+                int deltaX = 0;
+                int deltaY = 0;
+
+                switch (keyCode)
+                {
+                    case Keys.Left: deltaX = -step; break;
+                    case Keys.Right: deltaX = step; break;
+                    case Keys.Up: deltaY = -step; break;
+                    case Keys.Down: deltaY = step; break;
+                }
+
+                if (NudgeSelectedObject(deltaX, deltaY))
+                {
+                    return true; // Key handeled
+                }
+            }
+
             if (keyData == Keys.Delete)
             {
                 if (SelectedTextLabel != null || SelectedItem != null)
@@ -97,6 +127,96 @@ namespace VideoEditor.Controls
         {
             if (SelectedTextLabel != null) return true;
             return base.IsInputKey(keyData);
+        }
+        private bool NudgeSelectedObject(int deltaX, int deltaY)
+        {
+            if (LastCanvasWidth <= 0 || LastCanvasHeight <= 0) return false;
+
+            // 1. Move Selected Text Label
+            if (SelectedTextLabel != null)
+            {
+                var label = SelectedTextLabel;
+                var oldState = new TextTransformState
+                {
+                    RelativeX = label.RelativeX,
+                    RelativeY = label.RelativeY,
+                    RelativeWidth = label.RelativeWidth,
+                    RelativeHeight = label.RelativeHeight
+                };
+
+                label.RelativeX += (float)deltaX / LastCanvasWidth;
+                label.RelativeY += (float)deltaY / LastCanvasHeight;
+
+                var newState = new TextTransformState
+                {
+                    RelativeX = label.RelativeX,
+                    RelativeY = label.RelativeY,
+                    RelativeWidth = label.RelativeWidth,
+                    RelativeHeight = label.RelativeHeight
+                };
+
+                UndoRedoManager?.ExecuteCommand(new TransformTextCommand(label, oldState, newState));
+                this.Invalidate();
+                return true;
+            }
+
+            // 2. Move Selected Blur Overlay
+            if (SelectedItem?.Type == MediaType.Blur && SelectedItem.BlurData != null)
+            {
+                var blur = SelectedItem.BlurData;
+                var oldState = new BlurTransformState
+                {
+                    RelativeX = blur.RelativeX,
+                    RelativeY = blur.RelativeY,
+                    RelativeWidth = blur.RelativeWidth,
+                    RelativeHeight = blur.RelativeHeight
+                };
+
+                blur.RelativeX += (float)deltaX / LastCanvasWidth;
+                blur.RelativeY += (float)deltaY / LastCanvasHeight;
+
+                var newState = new BlurTransformState
+                {
+                    RelativeX = blur.RelativeX,
+                    RelativeY = blur.RelativeY,
+                    RelativeWidth = blur.RelativeWidth,
+                    RelativeHeight = blur.RelativeHeight
+                };
+
+                UndoRedoManager?.ExecuteCommand(new TransformBlurCommand(blur, oldState, newState));
+                ItemTransformChanged?.Invoke();
+                this.Invalidate();
+                return true;
+            }
+
+            // 3. Move Selected Image Item
+            if (SelectedItem?.Type == MediaType.Image)
+            {
+                var item = SelectedItem;
+                var oldState = new ImageTransformState
+                {
+                    PositionX = item.PositionX,
+                    PositionY = item.PositionY,
+                    Scale = item.Scale
+                };
+
+                item.PositionX += deltaX * (1080f / LastCanvasWidth);
+                item.PositionY += deltaY * (1920f / LastCanvasHeight);
+
+                var newState = new ImageTransformState
+                {
+                    PositionX = item.PositionX,
+                    PositionY = item.PositionY,
+                    Scale = item.Scale
+                };
+
+                UndoRedoManager?.ExecuteCommand(new TransformImageCommand(item, oldState, newState));
+                ItemTransformChanged?.Invoke();
+                this.Invalidate();
+                return true;
+            }
+
+            return false;
         }
 
         protected override void OnKeyPress(KeyPressEventArgs e)
