@@ -39,6 +39,12 @@ namespace VideoEditor.Controls
         private bool isResizingRight = false;
         private bool isResizingLeft = false;
 
+        // Multi-selection state
+        private HashSet<MediaItem> selectedItems = new HashSet<MediaItem>();
+        private bool isSelectionBoxActive = false;
+        private Point selectionBoxStart = Point.Empty;
+        private Rectangle currentSelectionBox = Rectangle.Empty;
+
         private MediaItem activeClip = null;
         private double clipDragOffset = 0;
         private const int EdgeMargin = 8;
@@ -52,12 +58,14 @@ namespace VideoEditor.Controls
 
         public event Action<double> TimeChanged;
         public event Action<MediaItem> ClipSelected;
+        public event Action<IEnumerable<MediaItem>> SelectionChanged;
         public event Action<MediaItem> ItemResized;
 
-        public MediaItem SelectedItem { get; private set; }
+        public MediaItem SelectedItem => selectedItems.FirstOrDefault();
+        public IReadOnlySet<MediaItem> SelectedItems => selectedItems;
 
-        private const double SnapThresholdPixels = 10; // Distance in pixels to trigger snap/stop
-        private const double BreakoutThresholdPixels = 25; // Drag distance required past edge to force continue
+        private const double SnapThresholdPixels = 10;
+        private const double BreakoutThresholdPixels = 25;
         private bool isSnappedToBoundary = false;
         private double targetSnapTime = 0;
 
@@ -92,7 +100,12 @@ namespace VideoEditor.Controls
             this.MouseMove += Timeline_MouseMove;
             this.MouseUp += Timeline_MouseUp;
             this.MouseWheel += Timeline_MouseWheel;
+            this.KeyDown += Timeline_KeyDown;
             this.Resize += (s, e) => UpdateScrollBars();
+
+            // Enable focus so KeyDown (Delete key) works properly
+            this.SetStyle(ControlStyles.Selectable, true);
+            this.TabStop = true;
         }
 
         private void ApplyDarkModeScrollbars()
@@ -112,8 +125,43 @@ namespace VideoEditor.Controls
         public void SetMediaItems(List<MediaItem> items)
         {
             mediaItems = items ?? new List<MediaItem>();
+            selectedItems.Clear();
             UpdateScrollBars();
             this.Invalidate();
+        }
+
+        public void DeleteSelectedItems()
+        {
+            if (selectedItems.Count == 0) return;
+
+            var itemsToDelete = selectedItems.ToList();
+            selectedItems.Clear();
+
+            foreach (var item in itemsToDelete)
+            {
+                if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio)
+                    continue;
+
+                var cmd = new DeleteMediaItemCommand(mediaItems, item);
+                UndoRedoManager?.ExecuteCommand(cmd);
+            }
+
+            NotifySelectionChanged();
+            this.Invalidate();
+        }
+
+        private void Timeline_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Delete)
+            {
+                DeleteSelectedItems();
+            }
+        }
+
+        private void NotifySelectionChanged()
+        {
+            ClipSelected?.Invoke(SelectedItem);
+            SelectionChanged?.Invoke(selectedItems);
         }
 
         private int GetMaxVisualTrackIndex()
@@ -140,6 +188,14 @@ namespace VideoEditor.Controls
             if (type == MediaType.Audio) return 0;
             int actualY = y + scrollY - headerHeight - trackMargin;
             return Math.Max(0, actualY / (trackHeight + trackMargin));
+        }
+
+        private Rectangle GetClipRectangle(MediaItem item, int leftPanelWidth)
+        {
+            int y = GetTrackY(item.TrackIndex, item.Type);
+            int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX;
+            int width = (int)(item.Duration * pixelsPerSecond);
+            return new Rectangle(x, y, Math.Max(width, 15), trackHeight);
         }
 
         private void UpdateScrollBars()
@@ -227,26 +283,24 @@ namespace VideoEditor.Controls
 
             foreach (var item in sortedItems)
             {
-                int y = GetTrackY(item.TrackIndex, item.Type);
-                int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX;
-                int width = (int)(item.Duration * pixelsPerSecond);
-
-                var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
+                var rect = GetClipRectangle(item, leftPanelWidth);
                 if (rect.Bottom < headerHeight || rect.Top > this.Height || rect.Right < leftPanelWidth || rect.Left > this.Width) continue;
+
+                bool isSelected = selectedItems.Contains(item);
 
                 var color = Color.SteelBlue;
                 if (item.Type == MediaType.Audio) color = Color.FromArgb(30, 70, 70);
                 else if (item.Type == MediaType.Text) color = Color.DarkGoldenrod;
                 else if (item.Type == MediaType.Blur) color = Color.Purple;
 
-                if (item == SelectedItem) color = Color.Crimson;
+                if (isSelected) color = Color.Crimson;
 
                 using (var clipBrush = new SolidBrush(color))
                 {
                     g.FillRectangle(clipBrush, rect);
                 }
 
-                if (item == SelectedItem)
+                if (isSelected)
                 {
                     using (var selectPen = new Pen(Color.Yellow, 2))
                     {
@@ -307,31 +361,23 @@ namespace VideoEditor.Controls
                     }
                 }
 
-                if (item.TextLabels != null)
-                {
-                    foreach (var label in item.TextLabels)
-                    {
-                        int labelX = leftPanelWidth + (int)((item.StartTime + label.StartTime) * pixelsPerSecond) - scrollX;
-                        int labelWidth = (int)(label.Duration * pixelsPerSecond);
-                        var textRect = new Rectangle(labelX, rect.Y + rect.Height - 18, Math.Max(labelWidth, 4), 14);
-
-                        using (var textBgBrush = new SolidBrush(Color.FromArgb(200, 255, 165, 0)))
-                        {
-                            g.FillRectangle(textBgBrush, textRect);
-                        }
-                        using (var textBorder = new Pen(Color.Black, 1))
-                        {
-                            g.DrawRectangle(textBorder, textRect);
-                        }
-                    }
-                }
-
                 if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio)
                 {
                     using (var lockHatch = new SolidBrush(Color.FromArgb(90, 0, 0, 0)))
                     {
                         g.FillRectangle(lockHatch, rect);
                     }
+                }
+            }
+
+            // Draw Drag Selection Box
+            if (isSelectionBoxActive && currentSelectionBox.Width > 0 && currentSelectionBox.Height > 0)
+            {
+                using (var fillBrush = new SolidBrush(Color.FromArgb(40, 0, 122, 204)))
+                using (var borderPen = new Pen(Color.FromArgb(0, 122, 204), 1))
+                {
+                    g.FillRectangle(fillBrush, currentSelectionBox);
+                    g.DrawRectangle(borderPen, currentSelectionBox);
                 }
             }
 
@@ -437,9 +483,10 @@ namespace VideoEditor.Controls
 
         private void Timeline_MouseDown(object sender, MouseEventArgs e)
         {
+            this.Focus();
             int leftPanelWidth = 80;
 
-            if (isDraggingPlayhead || isDraggingClip || isResizingRight || isResizingLeft) return;
+            if (isDraggingPlayhead || isDraggingClip || isResizingRight || isResizingLeft || isSelectionBoxActive) return;
 
             if (e.Y <= headerHeight)
             {
@@ -462,7 +509,6 @@ namespace VideoEditor.Controls
             }
 
             SelectedTrackIndex = clickedTrackIndex;
-
             bool isAudioRowClicked = (e.Y >= GetTrackY(0, MediaType.Audio));
 
             var hitTestOrder = mediaItems
@@ -477,32 +523,42 @@ namespace VideoEditor.Controls
                     _ => 0
                 });
 
+            bool ctrlPressed = ModifierKeys.HasFlag(Keys.Control);
+
             foreach (var item in hitTestOrder)
             {
-                int y = GetTrackY(item.TrackIndex, item.Type);
-                int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX;
-                int width = (int)(item.Duration * pixelsPerSecond);
-                var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
+                var rect = GetClipRectangle(item, leftPanelWidth);
 
                 if (rect.Contains(e.Location))
                 {
                     if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio) continue;
 
-                    SelectedItem = item;
-                    SelectedTrackIndex = item.TrackIndex;
-                    ClipSelected?.Invoke(item);
+                    if (ctrlPressed)
+                    {
+                        if (selectedItems.Contains(item)) selectedItems.Remove(item);
+                        else selectedItems.Add(item);
+                    }
+                    else
+                    {
+                        if (!selectedItems.Contains(item))
+                        {
+                            selectedItems.Clear();
+                            selectedItems.Add(item);
+                        }
+                    }
 
+                    SelectedTrackIndex = item.TrackIndex;
                     activeClip = item;
                     initialClipStartTime = item.StartTime;
                     initialClipTrackIndex = item.TrackIndex;
                     initialClipDuration = item.Duration;
 
-                    if (e.X >= (x - EdgeMargin) && e.X <= (x + EdgeMargin))
+                    if (e.X >= (rect.X - EdgeMargin) && e.X <= (rect.X + EdgeMargin))
                     {
                         isSnappedToBoundary = false;
                         isResizingLeft = true;
                     }
-                    else if (e.X >= (x + width - EdgeMargin) && e.X <= (x + width + EdgeMargin))
+                    else if (e.X >= (rect.Right - EdgeMargin) && e.X <= (rect.Right + EdgeMargin))
                     {
                         isSnappedToBoundary = false;
                         isResizingRight = true;
@@ -512,13 +568,24 @@ namespace VideoEditor.Controls
                         isDraggingClip = true;
                         clipDragOffset = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - item.StartTime;
                     }
+
+                    NotifySelectionChanged();
                     this.Invalidate();
                     return;
                 }
             }
 
-            SelectedItem = null;
-            ClipSelected?.Invoke(null);
+            // Clicked Empty Space: Clear selection (unless Ctrl is down) and start Box Selection
+            if (!ctrlPressed)
+            {
+                selectedItems.Clear();
+                NotifySelectionChanged();
+            }
+
+            isSelectionBoxActive = true;
+            selectionBoxStart = e.Location;
+            currentSelectionBox = new Rectangle(e.X, e.Y, 0, 0);
+
             CurrentTime = Math.Max(0, (e.X - leftPanelWidth + scrollX) / pixelsPerSecond);
             this.Invalidate();
         }
@@ -526,6 +593,36 @@ namespace VideoEditor.Controls
         private void Timeline_MouseMove(object sender, MouseEventArgs e)
         {
             int leftPanelWidth = 80;
+
+            if (isSelectionBoxActive)
+            {
+                this.Cursor = Cursors.Cross;
+
+                int x = Math.Min(selectionBoxStart.X, e.X);
+                int y = Math.Min(selectionBoxStart.Y, e.Y);
+                int width = Math.Abs(e.X - selectionBoxStart.X);
+                int height = Math.Abs(e.Y - selectionBoxStart.Y);
+
+                currentSelectionBox = new Rectangle(x, y, width, height);
+
+                bool ctrlPressed = ModifierKeys.HasFlag(Keys.Control);
+                if (!ctrlPressed) selectedItems.Clear();
+
+                foreach (var item in mediaItems)
+                {
+                    if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio) continue;
+
+                    var itemRect = GetClipRectangle(item, leftPanelWidth);
+                    if (currentSelectionBox.IntersectsWith(itemRect))
+                    {
+                        selectedItems.Add(item);
+                    }
+                }
+
+                NotifySelectionChanged();
+                this.Invalidate();
+                return;
+            }
 
             if (isDraggingPlayhead)
             {
@@ -538,11 +635,8 @@ namespace VideoEditor.Controls
 
                 double rawTime = (e.X - leftPanelWidth + scrollX) / pixelsPerSecond;
                 double clipEndTime = initialClipStartTime + initialClipDuration;
-
-                // Ensure new start time cannot exceed clip duration limits (min duration 0.5s)
                 double candidateStartTime = Math.Clamp(rawTime, 0, clipEndTime - 0.5);
 
-                // Find closest clip on the same track that ends BEFORE the active clip starts
                 var prevClip = mediaItems
                     .Where(item => item != activeClip &&
                                    item.TrackIndex == activeClip.TrackIndex &&
@@ -554,14 +648,11 @@ namespace VideoEditor.Controls
                 if (prevClip != null)
                 {
                     double obstacleEndTime = prevClip.StartTime + prevClip.Duration;
-
                     double pixelDiff = (candidateStartTime - obstacleEndTime) * pixelsPerSecond;
-                    double snapDistancePx = SnapThresholdPixels;
-                    double breakoutDistancePx = BreakoutThresholdPixels;
 
                     if (!isSnappedToBoundary)
                     {
-                        if (pixelDiff <= snapDistancePx && pixelDiff >= -breakoutDistancePx)
+                        if (pixelDiff <= SnapThresholdPixels && pixelDiff >= -BreakoutThresholdPixels)
                         {
                             isSnappedToBoundary = true;
                             targetSnapTime = obstacleEndTime;
@@ -570,11 +661,7 @@ namespace VideoEditor.Controls
                     }
                     else
                     {
-                        if (pixelDiff > snapDistancePx)
-                        {
-                            isSnappedToBoundary = false;
-                        }
-                        else if (pixelDiff < -breakoutDistancePx)
+                        if (pixelDiff > SnapThresholdPixels || pixelDiff < -BreakoutThresholdPixels)
                         {
                             isSnappedToBoundary = false;
                         }
@@ -597,12 +684,10 @@ namespace VideoEditor.Controls
             {
                 this.Cursor = Cursors.SizeWE;
 
-                // Calculate raw target duration based on cursor position
                 double rawDuration = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - activeClip.StartTime;
                 double candidateDuration = Math.Max(0.5, rawDuration);
                 double candidateEndTime = activeClip.StartTime + candidateDuration;
 
-                // Find closest clip on the same track that starts AFTER the current clip
                 var nextClip = mediaItems
                     .Where(item => item != activeClip &&
                                    item.TrackIndex == activeClip.TrackIndex &&
@@ -614,16 +699,11 @@ namespace VideoEditor.Controls
                 if (nextClip != null)
                 {
                     double obstacleStartTime = nextClip.StartTime;
-
-                    // Convert distance to pixels for intuitive snapping across different zoom levels
                     double pixelDiff = (candidateEndTime - obstacleStartTime) * pixelsPerSecond;
-                    double snapDistancePx = SnapThresholdPixels;
-                    double breakoutDistancePx = BreakoutThresholdPixels;
 
                     if (!isSnappedToBoundary)
                     {
-                        // Check if we hit or crossed the neighbor's boundary
-                        if (pixelDiff >= -snapDistancePx && pixelDiff <= breakoutDistancePx)
+                        if (pixelDiff >= -SnapThresholdPixels && pixelDiff <= BreakoutThresholdPixels)
                         {
                             isSnappedToBoundary = true;
                             targetSnapTime = obstacleStartTime;
@@ -632,20 +712,12 @@ namespace VideoEditor.Controls
                     }
                     else
                     {
-                        // Currently snapped: check if user pulled back before boundary OR pushed far enough to force through
-                        if (pixelDiff < -snapDistancePx)
+                        if (pixelDiff < -SnapThresholdPixels || pixelDiff > BreakoutThresholdPixels)
                         {
-                            // Pulled mouse back
-                            isSnappedToBoundary = false;
-                        }
-                        else if (pixelDiff > breakoutDistancePx)
-                        {
-                            // User forced through the obstacle
                             isSnappedToBoundary = false;
                         }
                         else
                         {
-                            // Hold at the boundary edge
                             candidateDuration = Math.Max(0.5, targetSnapTime - activeClip.StartTime);
                         }
                     }
@@ -662,24 +734,35 @@ namespace VideoEditor.Controls
             {
                 this.Cursor = Cursors.Default;
                 double newStart = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - clipDragOffset;
-                activeClip.StartTime = Math.Max(0, newStart);
+                double deltaStart = Math.Max(0, newStart) - activeClip.StartTime;
 
+                int trackDelta = 0;
                 if (activeClip.Type == MediaType.Image || activeClip.Type == MediaType.Text || activeClip.Type == MediaType.Blur)
                 {
                     int newTrack = GetTrackIndexFromY(e.Y, activeClip.Type);
+                    trackDelta = newTrack - activeClip.TrackIndex;
+                }
 
-                    if (activeClip.TrackIndex != newTrack && !lockedTracks.Contains(newTrack))
+                // Move all selected items together
+                foreach (var item in selectedItems)
+                {
+                    item.StartTime = Math.Max(0, item.StartTime + deltaStart);
+
+                    if (item.Type == MediaType.Image || item.Type == MediaType.Text || item.Type == MediaType.Blur)
                     {
-                        activeClip.TrackIndex = newTrack;
-                        UpdateScrollBars();
+                        int targetTrack = Math.Max(0, item.TrackIndex + trackDelta);
+                        if (!lockedTracks.Contains(targetTrack))
+                        {
+                            item.TrackIndex = targetTrack;
+                        }
                     }
                 }
 
+                UpdateScrollBars();
                 this.Invalidate();
             }
             else
             {
-                // Hover Detection for Resize Handles
                 bool isOverResizeEdge = false;
                 int hoveredTrackIndex = GetTrackIndexFromY(e.Y, MediaType.Image);
                 bool isAudioRowHovered = (e.Y >= GetTrackY(0, MediaType.Audio));
@@ -693,16 +776,12 @@ namespace VideoEditor.Controls
                 {
                     if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio) continue;
 
-                    int y = GetTrackY(item.TrackIndex, item.Type);
-                    int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX;
-                    int width = (int)(item.Duration * pixelsPerSecond);
-                    var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
+                    var rect = GetClipRectangle(item, leftPanelWidth);
 
-                    // Check if cursor is on either the left edge handle or right edge handle
                     if (rect.Contains(e.Location))
                     {
-                        if ((e.X >= (x - EdgeMargin) && e.X <= (x + EdgeMargin)) ||
-                            (e.X >= (x + width - EdgeMargin) && e.X <= (x + width + EdgeMargin)))
+                        if ((e.X >= (rect.X - EdgeMargin) && e.X <= (rect.X + EdgeMargin)) ||
+                            (e.X >= (rect.Right - EdgeMargin) && e.X <= (rect.Right + EdgeMargin)))
                         {
                             isOverResizeEdge = true;
                             break;
@@ -716,6 +795,15 @@ namespace VideoEditor.Controls
 
         private void Timeline_MouseUp(object sender, MouseEventArgs e)
         {
+            if (isSelectionBoxActive)
+            {
+                isSelectionBoxActive = false;
+                currentSelectionBox = Rectangle.Empty;
+                this.Cursor = Cursors.Default;
+                this.Invalidate();
+                return;
+            }
+
             if ((isResizingRight || isResizingLeft) && activeClip != null)
             {
                 if (Math.Abs(activeClip.Duration - initialClipDuration) > 0.001 || Math.Abs(activeClip.StartTime - initialClipStartTime) > 0.001)
@@ -743,6 +831,7 @@ namespace VideoEditor.Controls
                     UndoRedoManager?.ExecuteCommand(cmd);
                 }
             }
+
             isSnappedToBoundary = false;
             isDraggingPlayhead = false;
             isDraggingClip = false;

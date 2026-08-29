@@ -53,12 +53,6 @@ namespace VideoEditor
             if (m.Msg == WM_KEYDOWN)
             {
                 Keys keyData = (Keys)m.WParam | ModifierKeys;
-
-                if (keyData == Keys.Delete)
-                {
-                    DeleteSelectedMedia();
-                    return true; // Eat the key event
-                }
                 if (keyData == (Keys.Control | Keys.Z))
                 {
                     Undo();
@@ -103,12 +97,6 @@ namespace VideoEditor
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if (keyData == Keys.Delete)
-            {
-                DeleteSelectedMedia();
-                return true;
-            }
-
             if (keyData == (Keys.Control | Keys.Z))
             {
                 Undo();
@@ -123,30 +111,6 @@ namespace VideoEditor
 
             return base.ProcessCmdKey(ref msg, keyData);
         }
-
-        private void DeleteSelectedMedia()
-        {
-            var itemToDelete = timelineControl.SelectedItem;
-            if (itemToDelete != null)
-            {
-                var command = new VideoEditor.Commands.DeleteMediaItemCommand(mediaItems, itemToDelete);
-                undoRedoManager.ExecuteCommand(command);
-
-                mediaListBox.Items.Remove(Path.GetFileName(itemToDelete.FilePath) ?? "Text Layer");
-                RefreshTimeline();
-            }
-            else if (mediaListBox.SelectedIndex >= 0)
-            {
-                int idx = mediaListBox.SelectedIndex;
-                var item = mediaItems[idx];
-                var command = new VideoEditor.Commands.DeleteMediaItemCommand(mediaItems, item);
-                undoRedoManager.ExecuteCommand(command);
-
-                mediaListBox.Items.RemoveAt(idx);
-                RefreshTimeline();
-            }
-        }
-
         private void Undo()
         {
             if (undoRedoManager.CanUndo)
@@ -201,7 +165,6 @@ namespace VideoEditor
         {
             btnImport.Click += (s, e) => ImportFiles();
             btnPlayPause.Click += (s, e) => TogglePlayback();
-            btnDelete.Click += (s, e) => DeleteSelectedMedia();
             btnExport.Click += async (s, e) => await ExportVideoAsync();
             btnAutoCaption.Click += btnAutoCaption_Click;
 
