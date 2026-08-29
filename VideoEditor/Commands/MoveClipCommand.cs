@@ -1,35 +1,67 @@
-﻿using VideoEditor.Models;
+﻿using System.Collections.Generic;
+using VideoEditor.Models;
 using VideoEditor.Services;
 
 namespace VideoEditor.Commands
 {
     public class MoveClipCommand : IUndoableCommand
     {
-        private readonly MediaItem _item;
-        private readonly double _oldStartTime;
-        private readonly double _newStartTime;
-        private readonly int _oldTrackIndex;
-        private readonly int _newTrackIndex;
+        private class ClipState
+        {
+            public MediaItem Item { get; set; }
+            public double OldStartTime { get; set; }
+            public double NewStartTime { get; set; }
+            public int OldTrackIndex { get; set; }
+            public int NewTrackIndex { get; set; }
+        }
 
+        private readonly List<ClipState> _states = new List<ClipState>();
+
+        // Constructor for single clip move
         public MoveClipCommand(MediaItem item, double oldStartTime, double newStartTime, int oldTrackIndex, int newTrackIndex)
         {
-            _item = item;
-            _oldStartTime = oldStartTime;
-            _newStartTime = newStartTime;
-            _oldTrackIndex = oldTrackIndex;
-            _newTrackIndex = newTrackIndex;
+            _states.Add(new ClipState
+            {
+                Item = item,
+                OldStartTime = oldStartTime,
+                NewStartTime = newStartTime,
+                OldTrackIndex = oldTrackIndex,
+                NewTrackIndex = newTrackIndex
+            });
+        }
+
+        // Constructor for multi-clip move
+        public MoveClipCommand(IEnumerable<(MediaItem Item, double OldStart, double NewStart, int OldTrack, int NewTrack)> moves)
+        {
+            foreach (var move in moves)
+            {
+                _states.Add(new ClipState
+                {
+                    Item = move.Item,
+                    OldStartTime = move.OldStart,
+                    NewStartTime = move.NewStart,
+                    OldTrackIndex = move.OldTrack,
+                    NewTrackIndex = move.NewTrack
+                });
+            }
         }
 
         public void Execute()
         {
-            _item.StartTime = _newStartTime;
-            _item.TrackIndex = _newTrackIndex;
+            foreach (var state in _states)
+            {
+                state.Item.StartTime = state.NewStartTime;
+                state.Item.TrackIndex = state.NewTrackIndex;
+            }
         }
 
         public void Undo()
         {
-            _item.StartTime = _oldStartTime;
-            _item.TrackIndex = _oldTrackIndex;
+            foreach (var state in _states)
+            {
+                state.Item.StartTime = state.OldStartTime;
+                state.Item.TrackIndex = state.OldTrackIndex;
+            }
         }
     }
 }

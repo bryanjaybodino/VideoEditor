@@ -69,7 +69,7 @@ namespace VideoEditor.Controls
 
         public MediaItem SelectedItem => selectedItems.FirstOrDefault();
         public IReadOnlySet<MediaItem> SelectedItems => selectedItems;
-
+        private Dictionary<MediaItem, (double StartTime, int TrackIndex)> initialItemStates = new Dictionary<MediaItem, (double StartTime, int TrackIndex)>();
         private const double SnapThresholdPixels = 10;
         private const double BreakoutThresholdPixels = 25;
         private bool isSnappedToBoundary = false;
@@ -585,6 +585,13 @@ namespace VideoEditor.Controls
                     initialClipTrackIndex = item.TrackIndex;
                     initialClipDuration = item.Duration;
 
+                    // Capture initial positions for all selected items for undoing multi-clip moves
+                    initialItemStates.Clear();
+                    foreach (var selected in selectedItems)
+                    {
+                        initialItemStates[selected] = (selected.StartTime, selected.TrackIndex);
+                    }
+
                     if (e.X >= (rect.X - EdgeMargin) && e.X <= (rect.X + EdgeMargin))
                     {
                         isSnappedToBoundary = false;
@@ -927,11 +934,26 @@ namespace VideoEditor.Controls
             }
             else if (isDraggingClip && activeClip != null)
             {
-                if (Math.Abs(activeClip.StartTime - initialClipStartTime) > 0.001 || activeClip.TrackIndex != initialClipTrackIndex)
+                var moves = new List<(MediaItem Item, double OldStart, double NewStart, int OldTrack, int NewTrack)>();
+
+                foreach (var item in selectedItems)
                 {
-                    var cmd = new MoveClipCommand(activeClip, initialClipStartTime, activeClip.StartTime, initialClipTrackIndex, activeClip.TrackIndex);
+                    if (initialItemStates.TryGetValue(item, out var initialState))
+                    {
+                        if (Math.Abs(item.StartTime - initialState.StartTime) > 0.001 || item.TrackIndex != initialState.TrackIndex)
+                        {
+                            moves.Add((item, initialState.StartTime, item.StartTime, initialState.TrackIndex, item.TrackIndex));
+                        }
+                    }
+                }
+
+                if (moves.Count > 0)
+                {
+                    var cmd = new MoveClipCommand(moves);
                     UndoRedoManager?.ExecuteCommand(cmd);
                 }
+
+                initialItemStates.Clear();
             }
 
             isSnappedToBoundary = false;
@@ -943,7 +965,6 @@ namespace VideoEditor.Controls
             this.Cursor = Cursors.Default;
             this.Invalidate();
         }
-
         public void SelectItem(MediaItem item)
         {
             selectedItems.Clear();
