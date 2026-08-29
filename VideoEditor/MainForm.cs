@@ -197,7 +197,7 @@ namespace VideoEditor
                 undoRedoManager.ExecuteCommand(command);
 
                 SyncListBox();
-                previewControl.SelectedTextLabel = newLabel;
+                timelineControl.SelectItem(textMediaItem);
                 RefreshTimeline();
             };
 
@@ -237,6 +237,7 @@ namespace VideoEditor
                 undoRedoManager.ExecuteCommand(command);
 
                 SyncListBox();
+                timelineControl.SelectItem(blurMediaItem);
                 RefreshTimeline();
             };
 
@@ -815,6 +816,7 @@ namespace VideoEditor
             undoRedoManager.ExecuteCommand(command);
 
             SyncListBox();
+            timelineControl.SelectItem(item);
             RefreshTimeline();
         }
 

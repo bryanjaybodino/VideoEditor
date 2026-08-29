@@ -868,7 +868,17 @@ namespace VideoEditor.Controls
             this.Cursor = Cursors.Default;
             this.Invalidate();
         }
-
+        public void SelectItem(MediaItem item)
+        {
+            selectedItems.Clear();
+            if (item != null)
+            {
+                selectedItems.Add(item);
+                SelectedTrackIndex = item.TrackIndex;
+            }
+            NotifySelectionChanged();
+            this.Invalidate();
+        }
         private void Timeline_MouseWheel(object sender, MouseEventArgs e)
         {
             int leftPanelWidth = 80;
