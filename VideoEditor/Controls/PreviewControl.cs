@@ -339,25 +339,38 @@ namespace VideoEditor.Controls
 
         private void PreviewControl_MouseDown(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left)
+            if (e.Button != MouseButtons.Left) return;
+
+            this.Focus();
+
+            int canvasX = (this.Width - LastCanvasWidth) / 2;
+            int canvasY = (this.Height - LastCanvasHeight) / 2;
+
+            int selectedTrack = TimelineRef?.SelectedTrackIndex ?? -1;
+            var timelineSelectedItem = TimelineRef?.SelectedItem;
+
+            // Reset current active states
+            SelectedTextLabel = null;
+            selectedPreviewItem = null;
+
+            // 1. Combine ALL active screen items into a single unified hit-test collection
+            var activeItems = allFrameItems
+                .Where(item => !IsItemLocked(item) &&
+                               currentTimePosition >= item.StartTime &&
+                               currentTimePosition < item.StartTime + item.Duration)
+                // PRIORITY SORTING:
+                // First: Item on the active timeline track/selection gets TOP priority
+                // Second: Standard track visual order (higher track index painted on top)
+                .OrderByDescending(item => item == timelineSelectedItem || item.TrackIndex == selectedTrack)
+                .ThenBy(item => item.TrackIndex)
+                .ToList();
+
+            foreach (var item in activeItems)
             {
-                this.Focus();
-
-                int canvasX = (this.Width - LastCanvasWidth) / 2;
-                int canvasY = (this.Height - LastCanvasHeight) / 2;
-
-                // 1. Text Items Hit Testing
-                var activeTextItems = allFrameItems
-                    .Where(item => item.Type == MediaType.Text &&
-                                   item.TextData != null &&
-                                   !IsItemLocked(item) && // Check if track is locked
-                                   currentTimePosition >= item.StartTime &&
-                                   currentTimePosition < item.StartTime + item.Duration)
-                    .OrderByDescending(item => item.TrackIndex);
-
-                foreach (var textItem in activeTextItems)
+                // --- A. TEXT ITEM HIT TEST ---
+                if (item.Type == MediaType.Text && item.TextData != null)
                 {
-                    var label = textItem.TextData;
+                    var label = item.TextData;
                     float lX = canvasX + (label.RelativeX * LastCanvasWidth);
                     float lY = canvasY + (label.RelativeY * LastCanvasHeight);
                     float lW = label.RelativeWidth * LastCanvasWidth;
@@ -368,7 +381,7 @@ namespace VideoEditor.Controls
 
                     if (handleRect.Contains(e.Location))
                     {
-                        SelectedItem = textItem;
+                        SelectedItem = item;
                         SelectedTextLabel = label;
                         isResizingText = true;
                         lastMousePos = e.Location;
@@ -376,9 +389,9 @@ namespace VideoEditor.Controls
                         this.Invalidate();
                         return;
                     }
-                    else if (boundsRect.Contains(e.Location))
+                    if (boundsRect.Contains(e.Location))
                     {
-                        SelectedItem = textItem;
+                        SelectedItem = item;
                         SelectedTextLabel = label;
                         isDraggingText = true;
                         lastMousePos = e.Location;
@@ -388,21 +401,10 @@ namespace VideoEditor.Controls
                     }
                 }
 
-                // Clear selection if clicking empty area or locked item
-                SelectedTextLabel = null;
-
-                // 2. Blur Items Hit Testing
-                var activeBlurItems = allFrameItems
-                    .Where(item => item.Type == MediaType.Blur &&
-                                   item.BlurData != null &&
-                                   !IsItemLocked(item) && // Check if track is locked
-                                   currentTimePosition >= item.StartTime &&
-                                   currentTimePosition < item.StartTime + item.Duration)
-                    .OrderBy(item => item.TrackIndex);
-
-                foreach (var blurItem in activeBlurItems)
+                // --- B. BLUR ITEM HIT TEST ---
+                else if (item.Type == MediaType.Blur && item.BlurData != null)
                 {
-                    var blur = blurItem.BlurData;
+                    var blur = item.BlurData;
                     float bX = canvasX + (blur.RelativeX * LastCanvasWidth);
                     float bY = canvasY + (blur.RelativeY * LastCanvasHeight);
                     float bW = blur.RelativeWidth * LastCanvasWidth;
@@ -413,17 +415,17 @@ namespace VideoEditor.Controls
 
                     if (handleRect.Contains(e.Location))
                     {
-                        SelectedItem = blurItem;
-                        selectedPreviewItem = blurItem;
+                        SelectedItem = item;
+                        selectedPreviewItem = item;
                         isResizingBlur = true;
                         lastMousePos = e.Location;
                         this.Invalidate();
                         return;
                     }
-                    else if (boundsRect.Contains(e.Location))
+                    if (boundsRect.Contains(e.Location))
                     {
-                        SelectedItem = blurItem;
-                        selectedPreviewItem = blurItem;
+                        SelectedItem = item;
+                        selectedPreviewItem = item;
                         isDraggingBlur = true;
                         lastMousePos = e.Location;
                         this.Invalidate();
@@ -431,23 +433,38 @@ namespace VideoEditor.Controls
                     }
                 }
 
-                TextLabelSelected?.Invoke(null);
-
-                // 3. Image Items Hit Testing
-                if (activeFrameItems.Count > 0)
+                // --- C. IMAGE ITEM HIT TEST ---
+                else if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath))
                 {
-                    var clickedImage = GetImageItemAtPoint(e.Location, canvasX, canvasY, LastCanvasWidth, LastCanvasHeight);
-
-                    if (clickedImage != null && !IsItemLocked(clickedImage)) // Check if track is locked
+                    if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
                     {
-                        selectedPreviewItem = clickedImage;
-                        SelectedItem = clickedImage;
-                        isDraggingImage = true;
-                        lastMousePos = e.Location;
-                        this.Invalidate();
+                        float scale = Math.Max((float)LastCanvasWidth / img.Width, (float)LastCanvasHeight / img.Height) * item.Scale;
+                        int baseW = (int)(img.Width * scale);
+                        int baseH = (int)(img.Height * scale);
+
+                        float posX = item.PositionX * ((float)LastCanvasWidth / 1080f);
+                        float posY = item.PositionY * ((float)LastCanvasHeight / 1920f);
+
+                        int originX = canvasX + (LastCanvasWidth - baseW) / 2 + (int)posX;
+                        int originY = canvasY + (LastCanvasHeight - baseH) / 2 + (int)posY;
+
+                        RectangleF imageBounds = new RectangleF(originX, originY, baseW, baseH);
+
+                        if (imageBounds.Contains(e.Location))
+                        {
+                            selectedPreviewItem = item;
+                            SelectedItem = item;
+                            isDraggingImage = true;
+                            lastMousePos = e.Location;
+                            this.Invalidate();
+                            return;
+                        }
                     }
                 }
             }
+
+            TextLabelSelected?.Invoke(null);
+            this.Invalidate();
         }
         private void PreviewControl_MouseMove(object sender, MouseEventArgs e)
         {
