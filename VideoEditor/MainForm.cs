@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Windows.Media;
+using VideoEditor.Commands;
 using VideoEditor.Controls;
 using VideoEditor.Models;
 using VideoEditor.Services;
@@ -928,105 +929,111 @@ namespace VideoEditor
 
         private void SplitSelectedClip()
         {
-            var item = timelineControl.SelectedItem;
-            double playhead = timelineControl.CurrentTime;
+            double currentTime = timelineControl.CurrentTime;
+            var itemsToSplit = timelineControl.SelectedItems.ToList();
 
-            if (item != null && playhead > item.StartTime && playhead < (item.StartTime + item.Duration))
+            if (!itemsToSplit.Any()) return;
+
+            // Use BatchCommand or process each selected item
+            foreach (var item in itemsToSplit)
             {
-                double splitPointRelative = playhead - item.StartTime;
-                double originalDuration = item.Duration;
+                // Check if the current playhead time falls strictly within the item's duration
+                if (currentTime <= item.StartTime || currentTime >= item.StartTime + item.Duration)
+                    continue;
 
-                double oldLeftDuration = item.Duration;
-                item.Duration = splitPointRelative;
-                if (item.Type == MediaType.Image) UpdateSplitEffectDurations(item);
+                double splitOffset = currentTime - item.StartTime;
 
-                var newItem = new MediaItem
+                // Create right split item
+                var rightItem = new MediaItem
                 {
                     FilePath = item.FilePath,
                     Type = item.Type,
-                    StartTime = playhead,
-                    Duration = originalDuration - splitPointRelative,
+                    TrackIndex = item.TrackIndex,
+                    StartTime = currentTime,
+                    Duration = item.Duration - splitOffset,
+                    SourceOffset = item.SourceOffset + splitOffset,
                     OriginalDuration = item.OriginalDuration,
-                    SourceOffset = item.SourceOffset + splitPointRelative,
+                    Scale = item.Scale,
+                    PositionX = item.PositionX,
+                    PositionY = item.PositionY,
                     AudioPeaks = item.AudioPeaks,
-                    InEffect = item.InEffect != null ? new TransitionEffect { Type = item.InEffect.Type } : null,
-                    OutEffect = item.OutEffect != null ? new TransitionEffect { Type = item.OutEffect.Type } : null,
                     TextData = item.TextData != null ? new TextLabel
                     {
                         Content = item.TextData.Content,
-                        X = item.TextData.X,
-                        Y = item.TextData.Y,
-                        Width = item.TextData.Width,
-                        Height = item.TextData.Height,
+                        RelativeX = item.TextData.RelativeX,
+                        RelativeY = item.TextData.RelativeY,
+                        RelativeWidth = item.TextData.RelativeWidth,
+                        RelativeHeight = item.TextData.RelativeHeight,
                         FontSize = item.TextData.FontSize,
                         TextColor = item.TextData.TextColor,
-                        BackgroundColor = item.TextData.BackgroundColor
+                        BackgroundColor = item.TextData.BackgroundColor,
+                        IsBold = item.TextData.IsBold
+                    } : null,
+                    BlurData = item.BlurData != null ? new BlurOverlay
+                    {
+                        RelativeX = item.BlurData.RelativeX,
+                        RelativeY = item.BlurData.RelativeY,
+                        RelativeWidth = item.BlurData.RelativeWidth,
+                        RelativeHeight = item.BlurData.RelativeHeight,
+                        BlurRadius = item.BlurData.BlurRadius
                     } : null
                 };
 
-                if (newItem.Type == MediaType.Image) UpdateSplitEffectDurations(newItem);
+                // Resize the left item
+                var changeDurationCmd = new ChangeDurationCommand(item, item.Duration, splitOffset);
+                undoRedoManager.ExecuteCommand(changeDurationCmd);
 
-                var command = new VideoEditor.Commands.SplitMediaItemCommand(mediaItems, item, newItem, originalDuration);
-                undoRedoManager.ExecuteCommand(command);
-
-                ApplyAudioSeek(timelineControl.CurrentTime);
-
-                SyncListBox();
-                RefreshTimeline();
+                // Add the right item
+                var addCmd = new AddMediaItemCommand(mediaItems, rightItem);
+                undoRedoManager.ExecuteCommand(addCmd);
             }
+
+            SyncListBox();
+            RefreshTimeline();
         }
 
         private void SplitLeftSelectedClip()
         {
-            var item = timelineControl.SelectedItem;
-            double playhead = timelineControl.CurrentTime;
+            double currentTime = timelineControl.CurrentTime;
+            var itemsToSplit = timelineControl.SelectedItems.ToList();
 
-            if (item != null && playhead > item.StartTime && playhead < (item.StartTime + item.Duration))
+            foreach (var item in itemsToSplit)
             {
-                double cutAmount = playhead - item.StartTime;
-                if (item.OriginalDuration <= 0) item.OriginalDuration = item.Duration;
+                if (currentTime <= item.StartTime || currentTime >= item.StartTime + item.Duration)
+                    continue;
 
-                double oldStart = item.StartTime;
-                double oldDuration = item.Duration;
-                double oldOffset = item.SourceOffset;
+                double offset = currentTime - item.StartTime;
+                double newDuration = item.Duration - offset;
 
-                double newStart = playhead;
-                double newDuration = item.Duration - cutAmount;
-                double newOffset = item.SourceOffset + cutAmount;
-
-                var command = new VideoEditor.Commands.TrimMediaItemCommand(
-                    item, oldStart, newStart, oldDuration, newDuration, oldOffset, newOffset);
-
-                undoRedoManager.ExecuteCommand(command);
-                RefreshTimeline();
+                // Truncate left side: move start time to current playhead and shorten duration
+                item.StartTime = currentTime;
+                item.Duration = newDuration;
+                item.SourceOffset += offset;
             }
+
+            SyncListBox();
+            RefreshTimeline();
         }
 
         private void SplitRightSelectedClip()
         {
-            var item = timelineControl.SelectedItem;
-            double playhead = timelineControl.CurrentTime;
+            double currentTime = timelineControl.CurrentTime;
+            var itemsToSplit = timelineControl.SelectedItems.ToList();
 
-            if (item != null && playhead > item.StartTime && playhead < (item.StartTime + item.Duration))
+            foreach (var item in itemsToSplit)
             {
-                if (item.OriginalDuration <= 0) item.OriginalDuration = item.Duration;
+                if (currentTime <= item.StartTime || currentTime >= item.StartTime + item.Duration)
+                    continue;
 
-                double oldStart = item.StartTime;
-                double oldDuration = item.Duration;
-                double oldOffset = item.SourceOffset;
-
-                double newStart = item.StartTime;
-                double newDuration = playhead - item.StartTime;
-                double newOffset = item.SourceOffset;
-
-                var command = new VideoEditor.Commands.TrimMediaItemCommand(
-                    item, oldStart, newStart, oldDuration, newDuration, oldOffset, newOffset);
-
-                undoRedoManager.ExecuteCommand(command);
-                RefreshTimeline();
+                // Truncate right side: keep start time and trim duration to playhead offset
+                double newDuration = currentTime - item.StartTime;
+                var cmd = new ChangeDurationCommand(item, item.Duration, newDuration);
+                undoRedoManager.ExecuteCommand(cmd);
             }
-        }
 
+            SyncListBox();
+            RefreshTimeline();
+        }
         private void RefreshTimeline()
         {
             timelineControl.Invalidate();
