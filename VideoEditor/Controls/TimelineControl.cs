@@ -637,31 +637,44 @@ namespace VideoEditor.Controls
                 double clipEndTime = initialClipStartTime + initialClipDuration;
                 double candidateStartTime = Math.Clamp(rawTime, 0, clipEndTime - 0.5);
 
-                var prevClip = mediaItems
+                // Get snapping targets from the current row AND adjacent rows (+1 / -1)
+                var snapCandidates = mediaItems
                     .Where(item => item != activeClip &&
-                                   item.TrackIndex == activeClip.TrackIndex &&
-                                   item.Type == activeClip.Type &&
-                                   item.StartTime + item.Duration <= initialClipStartTime)
-                    .OrderByDescending(item => item.StartTime + item.Duration)
-                    .FirstOrDefault();
+                                   Math.Abs(item.TrackIndex - activeClip.TrackIndex) <= 1) // Checks current, row above, and row below
+                    .SelectMany(item => new[] { item.StartTime, item.StartTime + item.Duration }); // Check both Start and End boundaries
 
-                if (prevClip != null)
+                // Find closest target edge before the current end time
+                double? closestSnapTime = null;
+                double minDistance = double.MaxValue;
+
+                foreach (double targetTime in snapCandidates)
                 {
-                    double obstacleEndTime = prevClip.StartTime + prevClip.Duration;
-                    double pixelDiff = (candidateStartTime - obstacleEndTime) * pixelsPerSecond;
+                    if (targetTime >= clipEndTime) continue;
+
+                    double distance = Math.Abs((candidateStartTime - targetTime) * pixelsPerSecond);
+                    if (distance < minDistance)
+                    {
+                        minDistance = distance;
+                        closestSnapTime = targetTime;
+                    }
+                }
+
+                if (closestSnapTime.HasValue)
+                {
+                    double pixelDiff = (candidateStartTime - closestSnapTime.Value) * pixelsPerSecond;
 
                     if (!isSnappedToBoundary)
                     {
-                        if (pixelDiff <= SnapThresholdPixels && pixelDiff >= -BreakoutThresholdPixels)
+                        if (Math.Abs(pixelDiff) <= SnapThresholdPixels)
                         {
                             isSnappedToBoundary = true;
-                            targetSnapTime = obstacleEndTime;
+                            targetSnapTime = closestSnapTime.Value;
                             candidateStartTime = targetSnapTime;
                         }
                     }
                     else
                     {
-                        if (pixelDiff > SnapThresholdPixels || pixelDiff < -BreakoutThresholdPixels)
+                        if (Math.Abs((rawTime - targetSnapTime) * pixelsPerSecond) > BreakoutThresholdPixels)
                         {
                             isSnappedToBoundary = false;
                         }
@@ -688,31 +701,45 @@ namespace VideoEditor.Controls
                 double candidateDuration = Math.Max(0.5, rawDuration);
                 double candidateEndTime = activeClip.StartTime + candidateDuration;
 
-                var nextClip = mediaItems
+                // Get snapping targets from current row AND adjacent rows (+1 / -1)
+                var snapCandidates = mediaItems
                     .Where(item => item != activeClip &&
-                                   item.TrackIndex == activeClip.TrackIndex &&
-                                   item.Type == activeClip.Type &&
-                                   item.StartTime >= activeClip.StartTime)
-                    .OrderBy(item => item.StartTime)
-                    .FirstOrDefault();
+                                   Math.Abs(item.TrackIndex - activeClip.TrackIndex) <= 1) // Checks current, row above, and row below
+                    .SelectMany(item => new[] { item.StartTime, item.StartTime + item.Duration }); // Check both Start and End boundaries
 
-                if (nextClip != null)
+                // Find closest target edge after the clip's start time
+                double? closestSnapTime = null;
+                double minDistance = double.MaxValue;
+
+                foreach (double targetTime in snapCandidates)
                 {
-                    double obstacleStartTime = nextClip.StartTime;
-                    double pixelDiff = (candidateEndTime - obstacleStartTime) * pixelsPerSecond;
+                    if (targetTime <= activeClip.StartTime) continue;
+
+                    double distance = Math.Abs((candidateEndTime - targetTime) * pixelsPerSecond);
+                    if (distance < minDistance)
+                    {
+                        minDistance = distance;
+                        closestSnapTime = targetTime;
+                    }
+                }
+
+                if (closestSnapTime.HasValue)
+                {
+                    double pixelDiff = (candidateEndTime - closestSnapTime.Value) * pixelsPerSecond;
 
                     if (!isSnappedToBoundary)
                     {
-                        if (pixelDiff >= -SnapThresholdPixels && pixelDiff <= BreakoutThresholdPixels)
+                        if (Math.Abs(pixelDiff) <= SnapThresholdPixels)
                         {
                             isSnappedToBoundary = true;
-                            targetSnapTime = obstacleStartTime;
+                            targetSnapTime = closestSnapTime.Value;
                             candidateDuration = Math.Max(0.5, targetSnapTime - activeClip.StartTime);
                         }
                     }
                     else
                     {
-                        if (pixelDiff < -SnapThresholdPixels || pixelDiff > BreakoutThresholdPixels)
+                        double rawEndTime = activeClip.StartTime + rawDuration;
+                        if (Math.Abs((rawEndTime - targetSnapTime) * pixelsPerSecond) > BreakoutThresholdPixels)
                         {
                             isSnappedToBoundary = false;
                         }
