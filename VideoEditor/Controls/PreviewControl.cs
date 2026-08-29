@@ -321,8 +321,18 @@ namespace VideoEditor.Controls
                 .Where(item => !IsItemLocked(item) &&
                                currentTimePosition >= item.StartTime &&
                                currentTimePosition < item.StartTime + item.Duration)
+                // 1. PRIMARY: Selected timeline item or active track gets first priority
                 .OrderByDescending(item => item == timelineSelectedItem || item.TrackIndex == selectedTrack)
-                .ThenBy(item => item.TrackIndex)
+                // 2. SECONDARY: Higher track numbers draw on top, so check them first
+                .ThenByDescending(item => item.TrackIndex)
+                // 3. TIE-BREAKER: If on the same track, prioritize Text > Blur > Image
+                .ThenByDescending(item => item.Type switch
+                {
+                    MediaType.Text => 3,
+                    MediaType.Blur => 2,
+                    MediaType.Image => 1,
+                    _ => 0
+                })
                 .ToList();
 
             foreach (var item in activeItems)
