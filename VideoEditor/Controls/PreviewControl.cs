@@ -2,10 +2,10 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
+using VideoEditor.Commands;
 using VideoEditor.Models;
 using VideoEditor.Services;
 
@@ -26,14 +26,20 @@ namespace VideoEditor.Controls
         private bool isDraggingBlur = false;
         private bool isResizingBlur = false;
         private Point lastMousePos;
-        // Add reference property to PreviewControl.cs
+
+        private TextTransformState initialTextTransform;
+        private BlurTransformState initialBlurTransform;
+        private ImageTransformState initialImageTransform;
+
         public TimelineControl TimelineRef { get; set; }
+        public UndoRedoManager UndoRedoManager { get; set; }
 
         private bool IsItemLocked(MediaItem item)
         {
             if (item == null || TimelineRef == null) return false;
             return item.Type != MediaType.Audio && TimelineRef.IsTrackLocked(item.TrackIndex);
         }
+
         public int LastCanvasWidth { get; private set; } = 1080;
         public int LastCanvasHeight { get; private set; } = 1920;
 
@@ -62,26 +68,22 @@ namespace VideoEditor.Controls
             this.MouseMove += PreviewControl_MouseMove;
             this.MouseUp += PreviewControl_MouseUp;
             this.MouseWheel += PreviewControl_MouseWheel;
+            this.KeyUp += PreviewControl_KeyUp;
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            // Handle Delete key when a text label or item is selected in preview
             if (keyData == Keys.Delete)
             {
                 if (SelectedTextLabel != null || SelectedItem != null)
                 {
-                    if (this.FindForm() is MainForm mainForm)
-                    {
-                        SelectedItem = null;
-                        SelectedTextLabel = null;
-                        this.Invalidate();
-                    }
+                    SelectedItem = null;
+                    SelectedTextLabel = null;
+                    this.Invalidate();
                     return true;
                 }
             }
 
-            // Pass Ctrl+Z and Ctrl+Y down to the main window
             if (keyData == (Keys.Control | Keys.Z) || keyData == (Keys.Control | Keys.Y))
             {
                 return false;
@@ -127,7 +129,6 @@ namespace VideoEditor.Controls
             currentTimePosition = timePosition;
             allFrameItems = items ?? new List<MediaItem>();
 
-            // Include Image and Blur items in activeFrameItems
             activeFrameItems = allFrameItems
                 .Where(item => (item.Type == MediaType.Image || item.Type == MediaType.Blur) &&
                                timePosition >= item.StartTime &&
@@ -172,7 +173,6 @@ namespace VideoEditor.Controls
 
             g.SetClip(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
 
-            // FIX 3: Combine and sort visual tracks (Image + Blur) by TrackIndex
             var activeVisualItems = allFrameItems
                 .Where(item => (item.Type == MediaType.Image || (item.Type == MediaType.Blur && item.BlurData != null)) &&
                                currentTimePosition >= item.StartTime &&
@@ -190,7 +190,6 @@ namespace VideoEditor.Controls
 
             if (activeVisualItems.Count > 0 || activeTextItems.Count > 0)
             {
-                // Interleaved layer rendering according to track hierarchy
                 foreach (var item in activeVisualItems)
                 {
                     if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath) && imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
@@ -202,7 +201,6 @@ namespace VideoEditor.Controls
                             DrawImageSelectionHighlight(g, item, canvasX, canvasY, canvasWidth, canvasHeight);
                         }
 
-                        // Render embedded image text labels
                         double localTime = currentTimePosition - item.StartTime;
                         if (item.TextLabels != null)
                         {
@@ -226,7 +224,6 @@ namespace VideoEditor.Controls
                     }
                 }
 
-                // Standalone Text Items (Topmost)
                 foreach (var textItem in activeTextItems)
                 {
                     DrawTextLabelWithSelection(g, textItem.TextData, canvasX, canvasY, canvasWidth, canvasHeight);
@@ -305,38 +302,6 @@ namespace VideoEditor.Controls
             }
         }
 
-        private MediaItem GetImageItemAtPoint(Point point, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
-        {
-            var visualTopToBottom = activeFrameItems
-                .Where(item => item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath))
-                .OrderBy(item => item.TrackIndex)
-                .ToList();
-
-            foreach (var item in visualTopToBottom)
-            {
-                if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
-                {
-                    float scale = Math.Max((float)canvasWidth / img.Width, (float)canvasHeight / img.Height) * item.Scale;
-                    int baseW = (int)(img.Width * scale);
-                    int baseH = (int)(img.Height * scale);
-
-                    float posX = item.PositionX * ((float)canvasWidth / 1080f);
-                    float posY = item.PositionY * ((float)canvasHeight / 1920f);
-
-                    int originX = canvasX + (canvasWidth - baseW) / 2 + (int)posX;
-                    int originY = canvasY + (canvasHeight - baseH) / 2 + (int)posY;
-
-                    RectangleF imageBounds = new RectangleF(originX, originY, baseW, baseH);
-
-                    if (imageBounds.Contains(point))
-                    {
-                        return item;
-                    }
-                }
-            }
-            return null;
-        }
-
         private void PreviewControl_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left) return;
@@ -349,25 +314,19 @@ namespace VideoEditor.Controls
             int selectedTrack = TimelineRef?.SelectedTrackIndex ?? -1;
             var timelineSelectedItem = TimelineRef?.SelectedItem;
 
-            // Reset current active states
             SelectedTextLabel = null;
             selectedPreviewItem = null;
 
-            // 1. Combine ALL active screen items into a single unified hit-test collection
             var activeItems = allFrameItems
                 .Where(item => !IsItemLocked(item) &&
                                currentTimePosition >= item.StartTime &&
                                currentTimePosition < item.StartTime + item.Duration)
-                // PRIORITY SORTING:
-                // First: Item on the active timeline track/selection gets TOP priority
-                // Second: Standard track visual order (higher track index painted on top)
                 .OrderByDescending(item => item == timelineSelectedItem || item.TrackIndex == selectedTrack)
                 .ThenBy(item => item.TrackIndex)
                 .ToList();
 
             foreach (var item in activeItems)
             {
-                // --- A. TEXT ITEM HIT TEST ---
                 if (item.Type == MediaType.Text && item.TextData != null)
                 {
                     var label = item.TextData;
@@ -379,29 +338,27 @@ namespace VideoEditor.Controls
                     RectangleF handleRect = new RectangleF(lX + lW - 10, lY + lH - 10, 20, 20);
                     RectangleF boundsRect = new RectangleF(lX, lY, lW, lH);
 
-                    if (handleRect.Contains(e.Location))
+                    if (handleRect.Contains(e.Location) || boundsRect.Contains(e.Location))
                     {
                         SelectedItem = item;
                         SelectedTextLabel = label;
-                        isResizingText = true;
+                        isResizingText = handleRect.Contains(e.Location);
+                        isDraggingText = !isResizingText;
                         lastMousePos = e.Location;
-                        TextLabelSelected?.Invoke(label);
-                        this.Invalidate();
-                        return;
-                    }
-                    if (boundsRect.Contains(e.Location))
-                    {
-                        SelectedItem = item;
-                        SelectedTextLabel = label;
-                        isDraggingText = true;
-                        lastMousePos = e.Location;
+
+                        initialTextTransform = new TextTransformState
+                        {
+                            RelativeX = label.RelativeX,
+                            RelativeY = label.RelativeY,
+                            RelativeWidth = label.RelativeWidth,
+                            RelativeHeight = label.RelativeHeight
+                        };
+
                         TextLabelSelected?.Invoke(label);
                         this.Invalidate();
                         return;
                     }
                 }
-
-                // --- B. BLUR ITEM HIT TEST ---
                 else if (item.Type == MediaType.Blur && item.BlurData != null)
                 {
                     var blur = item.BlurData;
@@ -413,27 +370,26 @@ namespace VideoEditor.Controls
                     RectangleF handleRect = new RectangleF(bX + bW - 10, bY + bH - 10, 20, 20);
                     RectangleF boundsRect = new RectangleF(bX, bY, bW, bH);
 
-                    if (handleRect.Contains(e.Location))
+                    if (handleRect.Contains(e.Location) || boundsRect.Contains(e.Location))
                     {
                         SelectedItem = item;
                         selectedPreviewItem = item;
-                        isResizingBlur = true;
+                        isResizingBlur = handleRect.Contains(e.Location);
+                        isDraggingBlur = !isResizingBlur;
                         lastMousePos = e.Location;
-                        this.Invalidate();
-                        return;
-                    }
-                    if (boundsRect.Contains(e.Location))
-                    {
-                        SelectedItem = item;
-                        selectedPreviewItem = item;
-                        isDraggingBlur = true;
-                        lastMousePos = e.Location;
+
+                        initialBlurTransform = new BlurTransformState
+                        {
+                            RelativeX = blur.RelativeX,
+                            RelativeY = blur.RelativeY,
+                            RelativeWidth = blur.RelativeWidth,
+                            RelativeHeight = blur.RelativeHeight
+                        };
+
                         this.Invalidate();
                         return;
                     }
                 }
-
-                // --- C. IMAGE ITEM HIT TEST ---
                 else if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath))
                 {
                     if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
@@ -456,6 +412,14 @@ namespace VideoEditor.Controls
                             SelectedItem = item;
                             isDraggingImage = true;
                             lastMousePos = e.Location;
+
+                            initialImageTransform = new ImageTransformState
+                            {
+                                PositionX = item.PositionX,
+                                PositionY = item.PositionY,
+                                Scale = item.Scale
+                            };
+
                             this.Invalidate();
                             return;
                         }
@@ -466,12 +430,12 @@ namespace VideoEditor.Controls
             TextLabelSelected?.Invoke(null);
             this.Invalidate();
         }
+
         private void PreviewControl_MouseMove(object sender, MouseEventArgs e)
         {
             int deltaX = e.X - lastMousePos.X;
             int deltaY = e.Y - lastMousePos.Y;
 
-            // 1. Resizing Text
             if (isResizingText && selectedTextLabel != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
                 float currentW = selectedTextLabel.RelativeWidth * LastCanvasWidth;
@@ -483,7 +447,6 @@ namespace VideoEditor.Controls
                 lastMousePos = e.Location;
                 this.Invalidate();
             }
-            // 2. Dragging Text
             else if (isDraggingText && selectedTextLabel != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
                 float currentX = selectedTextLabel.RelativeX * LastCanvasWidth;
@@ -495,7 +458,6 @@ namespace VideoEditor.Controls
                 lastMousePos = e.Location;
                 this.Invalidate();
             }
-            // 3. Resizing Blur
             else if (isResizingBlur && SelectedItem?.BlurData != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
                 var blur = SelectedItem.BlurData;
@@ -509,7 +471,6 @@ namespace VideoEditor.Controls
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
-            // 4. Dragging Blur
             else if (isDraggingBlur && SelectedItem?.BlurData != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
                 var blur = SelectedItem.BlurData;
@@ -523,7 +484,6 @@ namespace VideoEditor.Controls
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
-            // 5. Dragging Image (ALWAYS use selectedPreviewItem locked from MouseDown)
             else if (isDraggingImage && selectedPreviewItem != null)
             {
                 selectedPreviewItem.PositionX += deltaX * (1080f / LastCanvasWidth);
@@ -536,6 +496,8 @@ namespace VideoEditor.Controls
 
         private void PreviewControl_MouseUp(object sender, MouseEventArgs e)
         {
+            CommitTransformCommand();
+
             isDraggingImage = false;
             isDraggingText = false;
             isResizingText = false;
@@ -543,12 +505,100 @@ namespace VideoEditor.Controls
             isResizingBlur = false;
         }
 
+        private void PreviewControl_KeyUp(object sender, KeyEventArgs e)
+        {
+            CommitTransformCommand();
+        }
+
+        private void CommitTransformCommand()
+        {
+            if ((isDraggingText || isResizingText) && selectedTextLabel != null && initialTextTransform != null)
+            {
+                var newState = new TextTransformState
+                {
+                    RelativeX = selectedTextLabel.RelativeX,
+                    RelativeY = selectedTextLabel.RelativeY,
+                    RelativeWidth = selectedTextLabel.RelativeWidth,
+                    RelativeHeight = selectedTextLabel.RelativeHeight
+                };
+
+                if (initialTextTransform.RelativeX != newState.RelativeX ||
+                    initialTextTransform.RelativeY != newState.RelativeY ||
+                    initialTextTransform.RelativeWidth != newState.RelativeWidth ||
+                    initialTextTransform.RelativeHeight != newState.RelativeHeight)
+                {
+                    var cmd = new TransformTextCommand(selectedTextLabel, initialTextTransform, newState);
+                    UndoRedoManager?.ExecuteCommand(cmd);
+                }
+                initialTextTransform = null;
+            }
+
+            if ((isDraggingBlur || isResizingBlur) && SelectedItem?.BlurData != null && initialBlurTransform != null)
+            {
+                var blur = SelectedItem.BlurData;
+                var newState = new BlurTransformState
+                {
+                    RelativeX = blur.RelativeX,
+                    RelativeY = blur.RelativeY,
+                    RelativeWidth = blur.RelativeWidth,
+                    RelativeHeight = blur.RelativeHeight
+                };
+
+                if (initialBlurTransform.RelativeX != newState.RelativeX ||
+                    initialBlurTransform.RelativeY != newState.RelativeY ||
+                    initialBlurTransform.RelativeWidth != newState.RelativeWidth ||
+                    initialBlurTransform.RelativeHeight != newState.RelativeHeight)
+                {
+                    var cmd = new TransformBlurCommand(blur, initialBlurTransform, newState);
+                    UndoRedoManager?.ExecuteCommand(cmd);
+                }
+                initialBlurTransform = null;
+            }
+
+            if (isDraggingImage && selectedPreviewItem != null && initialImageTransform != null)
+            {
+                var newState = new ImageTransformState
+                {
+                    PositionX = selectedPreviewItem.PositionX,
+                    PositionY = selectedPreviewItem.PositionY,
+                    Scale = selectedPreviewItem.Scale
+                };
+
+                if (initialImageTransform.PositionX != newState.PositionX ||
+                    initialImageTransform.PositionY != newState.PositionY ||
+                    initialImageTransform.Scale != newState.Scale)
+                {
+                    var cmd = new TransformImageCommand(selectedPreviewItem, initialImageTransform, newState);
+                    UndoRedoManager?.ExecuteCommand(cmd);
+                }
+                initialImageTransform = null;
+            }
+        }
+
         private void PreviewControl_MouseWheel(object sender, MouseEventArgs e)
         {
             if (SelectedItem?.Type == MediaType.Image && selectedTextLabel == null && !IsItemLocked(SelectedItem))
             {
+                var oldState = new ImageTransformState
+                {
+                    PositionX = SelectedItem.PositionX,
+                    PositionY = SelectedItem.PositionY,
+                    Scale = SelectedItem.Scale
+                };
+
                 float zoomDelta = e.Delta > 0 ? 1.05f : 0.95f;
                 SelectedItem.Scale = Math.Clamp(SelectedItem.Scale * zoomDelta, 0.1f, 5.0f);
+
+                var newState = new ImageTransformState
+                {
+                    PositionX = SelectedItem.PositionX,
+                    PositionY = SelectedItem.PositionY,
+                    Scale = SelectedItem.Scale
+                };
+
+                var cmd = new TransformImageCommand(SelectedItem, oldState, newState);
+                UndoRedoManager?.ExecuteCommand(cmd);
+
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }

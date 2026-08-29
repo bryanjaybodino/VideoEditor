@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -11,13 +10,13 @@ using System.Windows.Forms;
 using System.Windows.Media;
 using VideoEditor.Controls;
 using VideoEditor.Models;
-using Color = System.Drawing.Color;
 using VideoEditor.Services;
+using Color = System.Drawing.Color;
 using Timer = System.Windows.Forms.Timer;
 
 namespace VideoEditor
 {
-    public partial class MainForm : Form
+    public partial class MainForm : Form, IMessageFilter
     {
         [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
         private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubIdList);
@@ -47,6 +46,40 @@ namespace VideoEditor
         private UndoRedoManager undoRedoManager = new UndoRedoManager();
         private string userApiKey = string.Empty;
         private MediaItem currentPlayingAudioItem = null;
+
+        private const int WM_KEYDOWN = 0x0100;
+        public bool PreFilterMessage(ref Message m)
+        {
+            if (m.Msg == WM_KEYDOWN)
+            {
+                Keys keyData = (Keys)m.WParam | ModifierKeys;
+
+                if (keyData == Keys.Delete)
+                {
+                    DeleteSelectedMedia();
+                    return true; // Eat the key event
+                }
+                if (keyData == (Keys.Control | Keys.Z))
+                {
+                    Undo();
+                    return true;
+                }
+                if (keyData == (Keys.Control | Keys.Y))
+                {
+                    Redo();
+                    return true;
+                }
+            }
+            return false; // Pass other messages along
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            // Unregister to prevent memory leaks
+            Application.RemoveMessageFilter(this);
+            base.OnFormClosed(e);
+        }
+
         public MainForm()
         {
             exportService = new VideoExportService();
@@ -54,13 +87,18 @@ namespace VideoEditor
 
             InitializeComponent();
 
+            timelineControl.UndoRedoManager = undoRedoManager;
+            previewControl.UndoRedoManager = undoRedoManager;
+
             timelineControl.SetMediaItems(mediaItems);
             previewControl.TimelineRef = timelineControl;
             WireUpEvents();
             InitializePlaybackEngine();
 
-
             this.WindowState = FormWindowState.Maximized;
+
+            // Register the message filter when the form loads
+            Application.AddMessageFilter(this);
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -188,7 +226,7 @@ namespace VideoEditor
                     Type = MediaType.Text,
                     StartTime = timelineControl.CurrentTime,
                     Duration = 3.0,
-                    TrackIndex = timelineControl.SelectedTrackIndex, // Strictly use SelectedTrackIndex
+                    TrackIndex = timelineControl.SelectedTrackIndex,
                     TextData = newLabel
                 };
 
@@ -200,7 +238,6 @@ namespace VideoEditor
                 RefreshTimeline();
             };
 
-            // Inside WireUpEvents() in MainForm.cs:
             btnBlurOverlay.Click += (s, e) =>
             {
                 float targetWidth = 300f;
@@ -229,7 +266,7 @@ namespace VideoEditor
                     Type = MediaType.Blur,
                     StartTime = timelineControl.CurrentTime,
                     Duration = 3.0,
-                    TrackIndex = timelineControl.SelectedTrackIndex, // Use SelectedTrackIndex instead of hardcoded 1
+                    TrackIndex = timelineControl.SelectedTrackIndex,
                     BlurData = newBlur
                 };
 
@@ -239,7 +276,6 @@ namespace VideoEditor
                 SyncListBox();
                 RefreshTimeline();
             };
-
 
             numFontSize.ValueChanged += (s, e) =>
             {
@@ -326,13 +362,6 @@ namespace VideoEditor
                 BindTextLabelToUI(label);
             };
 
-            //previewControl.TransformCompleted += (oldState, newState) =>
-            //{
-            //    var command = new VideoEditor.Commands.TransformCommand(oldState, newState);
-            //    undoRedoManager.ExecuteCommand(command);
-            //    RefreshTimeline();
-            //};
-
             timelineControl.MouseDown += (s, e) =>
             {
                 isUserScrubbing = true;
@@ -346,7 +375,7 @@ namespace VideoEditor
                 ApplyAudioSeek(timelineControl.CurrentTime);
             };
         }
-       
+
         private async void btnAutoCaption_Click(object sender, EventArgs e)
         {
             var audioItem = mediaItems.FirstOrDefault(x => x.Type == MediaType.Audio);
@@ -465,7 +494,6 @@ namespace VideoEditor
                 double elapsedSecs = playbackStopwatch.Elapsed.TotalSeconds;
                 timelineControl.CurrentTime = playbackStartOffset + elapsedSecs;
 
-                // Synchronize audio state on every tick to enforce clip boundaries
                 ApplyAudioSeek(timelineControl.CurrentTime);
 
                 if (timelineControl.CurrentTime >= timelineControl.GetTotalDuration())
@@ -506,7 +534,6 @@ namespace VideoEditor
 
             if (activeAudioItem != null && File.Exists(activeAudioItem.FilePath))
             {
-                // If transitioning to a new clip or seeking, update the player
                 if (currentPlayingAudioItem != activeAudioItem || Math.Abs(audioPlayer.Position.TotalSeconds - ((timePosition - activeAudioItem.StartTime) + activeAudioItem.SourceOffset)) > 0.2)
                 {
                     EnsureAudioLoaded(activeAudioItem.FilePath);
@@ -523,7 +550,6 @@ namespace VideoEditor
             }
             else
             {
-                // Pause audio if playhead moves outside active audio boundaries
                 try
                 {
                     audioPlayer.Pause();
@@ -532,6 +558,7 @@ namespace VideoEditor
                 currentPlayingAudioItem = null;
             }
         }
+
         private void StartPlayback()
         {
             playbackStartOffset = timelineControl.CurrentTime;
@@ -775,7 +802,6 @@ namespace VideoEditor
             }
             else if (type == MediaType.Image)
             {
-                // FIX: Find the MAXIMUM end time on the target track instead of relying on list order
                 var trackImages = mediaItems.Where(x => x.Type == MediaType.Image && x.TrackIndex == targetTrack);
                 if (trackImages.Any())
                 {
@@ -810,11 +836,7 @@ namespace VideoEditor
         {
             if (item != null)
             {
-                // Track duration change via command (captures previous original duration vs current)
-                var command = new VideoEditor.Commands.ChangeDurationCommand(item, item.OriginalDuration, item.Duration);
-                undoRedoManager.ExecuteCommand(command);
-
-                item.OriginalDuration = item.Duration; // Sync reference for subsequent resizes
+                item.OriginalDuration = item.Duration;
 
                 if (item.Type == MediaType.Image)
                 {
@@ -880,12 +902,10 @@ namespace VideoEditor
                 double splitPointRelative = playhead - item.StartTime;
                 double originalDuration = item.Duration;
 
-                // Update left clip parameters
                 double oldLeftDuration = item.Duration;
                 item.Duration = splitPointRelative;
                 if (item.Type == MediaType.Image) UpdateSplitEffectDurations(item);
 
-                // Create right clip parameters
                 var newItem = new MediaItem
                 {
                     FilePath = item.FilePath,
@@ -893,7 +913,7 @@ namespace VideoEditor
                     StartTime = playhead,
                     Duration = originalDuration - splitPointRelative,
                     OriginalDuration = item.OriginalDuration,
-                    SourceOffset = item.SourceOffset + splitPointRelative, // Audio offset shifts forward
+                    SourceOffset = item.SourceOffset + splitPointRelative,
                     AudioPeaks = item.AudioPeaks,
                     InEffect = item.InEffect != null ? new TransitionEffect { Type = item.InEffect.Type } : null,
                     OutEffect = item.OutEffect != null ? new TransitionEffect { Type = item.OutEffect.Type } : null,
@@ -912,17 +932,16 @@ namespace VideoEditor
 
                 if (newItem.Type == MediaType.Image) UpdateSplitEffectDurations(newItem);
 
-                // Execute split command
                 var command = new VideoEditor.Commands.SplitMediaItemCommand(mediaItems, item, newItem, originalDuration);
                 undoRedoManager.ExecuteCommand(command);
 
-                // Re-evaluate audio engine position to force immediate sync/stop
                 ApplyAudioSeek(timelineControl.CurrentTime);
 
                 SyncListBox();
                 RefreshTimeline();
             }
         }
+
         private void SplitLeftSelectedClip()
         {
             var item = timelineControl.SelectedItem;
@@ -1046,55 +1065,6 @@ namespace VideoEditor
             catch { }
 
             return 120.0;
-        }
-    }
-
-    public class ProgressForm : Form
-    {
-        private ProgressBar progressBar;
-        private Label lblStatus;
-
-        public ProgressForm()
-        {
-            this.Size = new Size(400, 150);
-            this.Text = "Exporting Video";
-            this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
-            this.MinimizeBox = false;
-            this.ControlBox = false;
-            this.BackColor = Color.FromArgb(28, 28, 28);
-
-            lblStatus = new Label
-            {
-                Text = "Rendering video...",
-                ForeColor = Color.FromArgb(240, 240, 240),
-                Location = new Point(20, 20),
-                AutoSize = true
-            };
-
-            progressBar = new ProgressBar
-            {
-                Location = new Point(20, 50),
-                Size = new Size(340, 25),
-                Minimum = 0,
-                Maximum = 100
-            };
-
-            this.Controls.Add(lblStatus);
-            this.Controls.Add(progressBar);
-        }
-
-        public void UpdateProgress(int value, string text)
-        {
-            if (this.InvokeRequired)
-            {
-                this.Invoke((MethodInvoker)delegate { UpdateProgress(value, text); });
-                return;
-            }
-
-            progressBar.Value = Math.Clamp(value, 0, 100);
-            lblStatus.Text = text;
         }
     }
 }
