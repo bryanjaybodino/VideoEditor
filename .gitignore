@@ -367,3 +367,4 @@ FodyWeavers.xsd
 !/bin/Debug/**
 /VideoEditor/bin/Debug/net8.0-windows/VideoEditor.exe
 /VideoEditor/bin/Debug/net8.0-windows/VideoEditor.dll
+/VideoEditor/bin/Debug/net8.0-windows/project_autosave.json

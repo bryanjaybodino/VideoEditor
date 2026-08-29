@@ -34,10 +34,16 @@ namespace VideoEditor.Controls
         private const int trackMargin = 5;
         private const int scrollBarSize = 18;
         public int SelectedTrackIndex { get; private set; } = 0;
+
         private bool isDraggingPlayhead = false;
         private bool isDraggingClip = false;
         private bool isResizingRight = false;
         private bool isResizingLeft = false;
+
+        // Row Dragging State
+        private bool isDraggingRow = false;
+        private int dragSourceTrackIndex = -1;
+        private int dragTargetTrackIndex = -1;
 
         // Multi-selection state
         private HashSet<MediaItem> selectedItems = new HashSet<MediaItem>();
@@ -103,7 +109,6 @@ namespace VideoEditor.Controls
             this.KeyDown += Timeline_KeyDown;
             this.Resize += (s, e) => UpdateScrollBars();
 
-            // Enable focus so KeyDown (Delete key) works properly
             this.SetStyle(ControlStyles.Selectable, true);
             this.TabStop = true;
         }
@@ -228,6 +233,28 @@ namespace VideoEditor.Controls
             }
         }
 
+        public void MoveRowContent(int sourceTrackIndex, int targetTrackIndex)
+        {
+            if (sourceTrackIndex == targetTrackIndex) return;
+
+            foreach (var item in mediaItems)
+            {
+                if (item.Type == MediaType.Audio) continue;
+
+                if (item.TrackIndex == sourceTrackIndex)
+                {
+                    item.TrackIndex = targetTrackIndex;
+                }
+                else if (item.TrackIndex == targetTrackIndex)
+                {
+                    item.TrackIndex = sourceTrackIndex;
+                }
+            }
+
+            SelectedTrackIndex = targetTrackIndex;
+            this.Invalidate();
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
@@ -246,12 +273,17 @@ namespace VideoEditor.Controls
                 bool isRowSelected = (i == SelectedTrackIndex);
 
                 Color rowBgColor = isRowSelected ? Color.FromArgb(45, 55, 75) : Color.FromArgb(30, 30, 30);
+                if (isDraggingRow && i == dragTargetTrackIndex)
+                {
+                    rowBgColor = Color.FromArgb(60, 80, 110);
+                }
+
                 using (var bgBrush = new SolidBrush(rowBgColor))
                 {
                     g.FillRectangle(bgBrush, leftPanelWidth, trackY, this.Width - leftPanelWidth, trackHeight);
                 }
 
-                if (isRowSelected)
+                if (isRowSelected || (isDraggingRow && i == dragTargetTrackIndex))
                 {
                     using (var borderPen = new Pen(Color.FromArgb(0, 122, 204), 1.5f))
                     {
@@ -370,7 +402,6 @@ namespace VideoEditor.Controls
                 }
             }
 
-            // Draw Drag Selection Box
             if (isSelectionBoxActive && currentSelectionBox.Width > 0 && currentSelectionBox.Height > 0)
             {
                 using (var fillBrush = new SolidBrush(Color.FromArgb(40, 0, 122, 204)))
@@ -418,6 +449,11 @@ namespace VideoEditor.Controls
                 bool isTrackLocked = lockedTracks.Contains(i);
 
                 Color leftBgColor = isRowSelected ? Color.FromArgb(40, 50, 70) : Color.FromArgb(25, 25, 25);
+                if (isDraggingRow && i == dragTargetTrackIndex)
+                {
+                    leftBgColor = Color.FromArgb(60, 80, 110);
+                }
+
                 using (var leftBrush = new SolidBrush(leftBgColor))
                 {
                     g.FillRectangle(leftBrush, 0, trackY, leftPanelWidth, trackHeight);
@@ -486,7 +522,7 @@ namespace VideoEditor.Controls
             this.Focus();
             int leftPanelWidth = 80;
 
-            if (isDraggingPlayhead || isDraggingClip || isResizingRight || isResizingLeft || isSelectionBoxActive) return;
+            if (isDraggingPlayhead || isDraggingClip || isResizingRight || isResizingLeft || isSelectionBoxActive || isDraggingRow) return;
 
             if (e.Y <= headerHeight)
             {
@@ -498,7 +534,7 @@ namespace VideoEditor.Controls
             int clickedTrackIndex = GetTrackIndexFromY(e.Y, MediaType.Image);
             int trackY = GetTrackY(clickedTrackIndex, MediaType.Image);
 
-            if (e.X < leftPanelWidth)
+            if (e.X < leftPanelWidth && e.Y > headerHeight)
             {
                 int btnY = trackY + 12;
                 int btnW = 20, btnH = 20;
@@ -506,6 +542,13 @@ namespace VideoEditor.Controls
                 if (new Rectangle(5, btnY, btnW, btnH).Contains(e.Location)) { InsertTrackAbove(clickedTrackIndex); return; }
                 if (new Rectangle(30, btnY, btnW, btnH).Contains(e.Location)) { DeleteTrackAt(clickedTrackIndex); return; }
                 if (new Rectangle(55, btnY, btnW, btnH).Contains(e.Location)) { ToggleTrackLock(clickedTrackIndex); return; }
+
+                isDraggingRow = true;
+                dragSourceTrackIndex = clickedTrackIndex;
+                dragTargetTrackIndex = clickedTrackIndex;
+                SelectedTrackIndex = clickedTrackIndex;
+                this.Invalidate();
+                return;
             }
 
             SelectedTrackIndex = clickedTrackIndex;
@@ -575,7 +618,6 @@ namespace VideoEditor.Controls
                 }
             }
 
-            // Clicked Empty Space: Clear selection (unless Ctrl is down) and start Box Selection
             if (!ctrlPressed)
             {
                 selectedItems.Clear();
@@ -593,6 +635,18 @@ namespace VideoEditor.Controls
         private void Timeline_MouseMove(object sender, MouseEventArgs e)
         {
             int leftPanelWidth = 80;
+
+            if (isDraggingRow)
+            {
+                this.Cursor = Cursors.SizeAll;
+                int hoverTrack = GetTrackIndexFromY(e.Y, MediaType.Image);
+                if (hoverTrack != dragTargetTrackIndex)
+                {
+                    dragTargetTrackIndex = hoverTrack;
+                    this.Invalidate();
+                }
+                return;
+            }
 
             if (isSelectionBoxActive)
             {
@@ -637,13 +691,11 @@ namespace VideoEditor.Controls
                 double clipEndTime = initialClipStartTime + initialClipDuration;
                 double candidateStartTime = Math.Clamp(rawTime, 0, clipEndTime - 0.5);
 
-                // Get snapping targets from the current row AND adjacent rows (+1 / -1)
                 var snapCandidates = mediaItems
                     .Where(item => item != activeClip &&
-                                   Math.Abs(item.TrackIndex - activeClip.TrackIndex) <= 1) // Checks current, row above, and row below
-                    .SelectMany(item => new[] { item.StartTime, item.StartTime + item.Duration }); // Check both Start and End boundaries
+                                   Math.Abs(item.TrackIndex - activeClip.TrackIndex) <= 1)
+                    .SelectMany(item => new[] { item.StartTime, item.StartTime + item.Duration });
 
-                // Find closest target edge before the current end time
                 double? closestSnapTime = null;
                 double minDistance = double.MaxValue;
 
@@ -701,13 +753,11 @@ namespace VideoEditor.Controls
                 double candidateDuration = Math.Max(0.5, rawDuration);
                 double candidateEndTime = activeClip.StartTime + candidateDuration;
 
-                // Get snapping targets from current row AND adjacent rows (+1 / -1)
                 var snapCandidates = mediaItems
                     .Where(item => item != activeClip &&
-                                   Math.Abs(item.TrackIndex - activeClip.TrackIndex) <= 1) // Checks current, row above, and row below
-                    .SelectMany(item => new[] { item.StartTime, item.StartTime + item.Duration }); // Check both Start and End boundaries
+                                   Math.Abs(item.TrackIndex - activeClip.TrackIndex) <= 1)
+                    .SelectMany(item => new[] { item.StartTime, item.StartTime + item.Duration });
 
-                // Find closest target edge after the clip's start time
                 double? closestSnapTime = null;
                 double minDistance = double.MaxValue;
 
@@ -770,7 +820,6 @@ namespace VideoEditor.Controls
                     trackDelta = newTrack - activeClip.TrackIndex;
                 }
 
-                // Move all selected items together
                 foreach (var item in selectedItems)
                 {
                     item.StartTime = Math.Max(0, item.StartTime + deltaStart);
@@ -794,6 +843,27 @@ namespace VideoEditor.Controls
                 int hoveredTrackIndex = GetTrackIndexFromY(e.Y, MediaType.Image);
                 bool isAudioRowHovered = (e.Y >= GetTrackY(0, MediaType.Audio));
 
+                // 1. Check if hovering over the Left Control Panel for Row Dragging
+                if (e.X < leftPanelWidth && e.Y > headerHeight && !isAudioRowHovered)
+                {
+                    int trackY = GetTrackY(hoveredTrackIndex, MediaType.Image);
+                    int btnY = trackY + 12;
+                    int btnW = 20, btnH = 20;
+
+                    // Exclude action buttons (Up, Delete, Lock)
+                    bool isOverButton = new Rectangle(5, btnY, btnW, btnH).Contains(e.Location) ||
+                                        new Rectangle(30, btnY, btnW, btnH).Contains(e.Location) ||
+                                        new Rectangle(55, btnY, btnW, btnH).Contains(e.Location);
+
+                    if (!isOverButton)
+                    {
+                        // Show hand/move cursor to indicate the row can be dragged
+                        this.Cursor = Cursors.SizeAll;
+                        return;
+                    }
+                }
+
+                // 2. Check if hovering over clip edges for resizing
                 var hoveredItems = mediaItems
                     .Where(item => isAudioRowHovered
                         ? item.Type == MediaType.Audio
@@ -822,6 +892,22 @@ namespace VideoEditor.Controls
 
         private void Timeline_MouseUp(object sender, MouseEventArgs e)
         {
+            if (isDraggingRow)
+            {
+                isDraggingRow = false;
+                this.Cursor = Cursors.Default;
+
+                if (dragSourceTrackIndex != -1 && dragTargetTrackIndex != -1 && dragSourceTrackIndex != dragTargetTrackIndex)
+                {
+                    MoveRowContent(dragSourceTrackIndex, dragTargetTrackIndex);
+                }
+
+                dragSourceTrackIndex = -1;
+                dragTargetTrackIndex = -1;
+                this.Invalidate();
+                return;
+            }
+
             if (isSelectionBoxActive)
             {
                 isSelectionBoxActive = false;
@@ -868,6 +954,7 @@ namespace VideoEditor.Controls
             this.Cursor = Cursors.Default;
             this.Invalidate();
         }
+
         public void SelectItem(MediaItem item)
         {
             selectedItems.Clear();
@@ -879,6 +966,7 @@ namespace VideoEditor.Controls
             NotifySelectionChanged();
             this.Invalidate();
         }
+
         private void Timeline_MouseWheel(object sender, MouseEventArgs e)
         {
             int leftPanelWidth = 80;

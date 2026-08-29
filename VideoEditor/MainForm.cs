@@ -329,6 +329,8 @@ namespace VideoEditor
                 isUserScrubbing = false;
                 scrubAudioTimer.Stop();
                 ApplyAudioSeek(timelineControl.CurrentTime);
+
+                previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
             };
 
             // Example assuming you added a button named btnClearAll in Designer
@@ -1103,7 +1105,7 @@ namespace VideoEditor
 
 
         // Add path constant near top of class
-        private string AutoSaveFilePath => Path.Combine(Application.UserAppDataPath, "project_autosave.json");
+        private string AutoSaveFilePath => Path.Combine(Application.StartupPath, "project_autosave.json");
 
         private void SaveProjectState()
         {
