@@ -53,5 +53,10 @@ namespace VideoEditor
             progressBar.Value = Math.Clamp(value, 0, 100);
             lblStatus.Text = text;
         }
+
+        private void InitializeComponent()
+        {
+
+        }
     }
 }

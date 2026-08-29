@@ -17,6 +17,11 @@ namespace VideoEditor
         private LinkLabel lblLink;
         private Label lblInstruction;
 
+        private void InitializeComponent()
+        {
+
+        }
+
         public ApiKeyForm(string existingKey = "", bool initialGenerateImages = true)
         {
             this.Text = "Enter Google AI Studio API Key";

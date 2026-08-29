@@ -61,6 +61,7 @@ namespace VideoEditor
         /// </summary>
         private void InitializeComponent()
         {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(MainForm));
             mainLayout = new TableLayoutPanel();
             toolbar = new FlowLayoutPanel();
             btnImport = new Button();
@@ -714,6 +715,7 @@ namespace VideoEditor
             BackColor = Color.FromArgb(18, 18, 18);
             ClientSize = new Size(1400, 900);
             Controls.Add(mainLayout);
+            Icon = (Icon)resources.GetObject("$this.Icon");
             Name = "MainForm";
             StartPosition = FormStartPosition.CenterScreen;
             Text = "VideoEditor - Mobile Slideshow Video Maker";
