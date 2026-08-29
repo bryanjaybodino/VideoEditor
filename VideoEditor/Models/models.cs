@@ -59,6 +59,13 @@ namespace VideoEditor.Models
         public double Duration => EndTime - StartTime;
     }
 
+    public class ImagePromptSegment
+    {
+        public string ImagePrompt { get; set; }
+        public double StartTime { get; set; }
+        public double Duration { get; set; }
+    }
+
     public class MediaItem
     {
         public string FilePath { get; set; }

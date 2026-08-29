@@ -8,17 +8,19 @@ namespace VideoEditor
     public class ApiKeyForm : Form
     {
         public string ApiKey { get; private set; }
+        public bool GenerateImages { get; private set; }
 
         private TextBox txtApiKey;
+        private CheckBox chkGenerateImages;
         private Button btnOk;
         private Button btnCancel;
         private LinkLabel lblLink;
         private Label lblInstruction;
 
-        public ApiKeyForm(string existingKey = "")
+        public ApiKeyForm(string existingKey = "", bool initialGenerateImages = true)
         {
             this.Text = "Enter Google AI Studio API Key";
-            this.Size = new Size(480, 220);
+            this.Size = new Size(480, 260); // Adjusted height for checkbox
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -72,11 +74,22 @@ namespace VideoEditor
                 Font = new Font("Segoe UI", 9.5F)
             };
 
+            // Image Generation Toggle Checkbox
+            chkGenerateImages = new CheckBox
+            {
+                Text = "Automatically generate AI scene images for captions",
+                Location = new Point(20, 110),
+                AutoSize = true,
+                Checked = initialGenerateImages,
+                Font = new Font("Segoe UI", 9F, FontStyle.Regular),
+                ForeColor = Color.FromArgb(220, 220, 220)
+            };
+
             btnOk = new Button
             {
                 Text = "OK",
                 DialogResult = DialogResult.OK,
-                Location = new Point(234, 120),
+                Location = new Point(234, 160),
                 Size = new Size(100, 32),
                 BackColor = Color.FromArgb(0, 120, 215),
                 ForeColor = Color.White,
@@ -92,13 +105,14 @@ namespace VideoEditor
                     return;
                 }
                 ApiKey = txtApiKey.Text.Trim();
+                GenerateImages = chkGenerateImages.Checked;
             };
 
             btnCancel = new Button
             {
                 Text = "Cancel",
                 DialogResult = DialogResult.Cancel,
-                Location = new Point(340, 120),
+                Location = new Point(340, 160),
                 Size = new Size(100, 32),
                 BackColor = Color.FromArgb(48, 48, 48),
                 ForeColor = Color.White,
@@ -109,6 +123,7 @@ namespace VideoEditor
             this.Controls.Add(lblInstruction);
             this.Controls.Add(lblLink);
             this.Controls.Add(txtApiKey);
+            this.Controls.Add(chkGenerateImages);
             this.Controls.Add(btnOk);
             this.Controls.Add(btnCancel);
 

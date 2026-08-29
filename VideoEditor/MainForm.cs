@@ -385,40 +385,83 @@ namespace VideoEditor
                 return;
             }
 
+            bool shouldGenerateImages = false;
+
             using (var keyForm = new ApiKeyForm(userApiKey))
             {
-                if (keyForm.ShowDialog(this) != DialogResult.OK)
-                {
-                    return;
-                }
-
+                if (keyForm.ShowDialog(this) != DialogResult.OK) return;
                 userApiKey = keyForm.ApiKey;
+                shouldGenerateImages = false;// Temporary unavailable //keyForm.GenerateImages;
             }
+
+            var imageGenService = new ImageGenerationService();
 
             try
             {
                 btnAutoCaption.Enabled = false;
-                btnAutoCaption.Text = "Transcribing...";
+                btnAutoCaption.Text = "Transcribing Speech...";
                 Cursor = Cursors.WaitCursor;
 
+                // Step 1: Transcribe audio to get captions
                 var captions = await captionService.TranscribeAudioWithGemini(audioItem.FilePath, userApiKey);
-
                 if (captions.Count == 0)
                 {
-                    MessageBox.Show("No speech was detected in the audio file.", "Caption Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show("No speech detected in audio.", "Caption Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
 
+                // Add captions onto the visual timeline
                 captionService.AddCaptionsToMedia(captions, mediaItems);
+                
+                int generatedCount = 0;
+                // Step 2: Directly generate images using caption text
+                if (shouldGenerateImages)
+                {
+                    var imageSegments = new List<(string FilePath, double StartTime, double Duration)>();
 
+                    for (int i = 0; i < captions.Count; i++)
+                    {
+                        var caption = captions[i];
+                        btnAutoCaption.Text = $"Generating Image {i + 1}/{captions.Count}...";
+
+                        try
+                        {
+                            string fullPrompt = $"A high quality cinematic scene depicting: {caption.Text}";
+                            double duration = Math.Max(0.5, caption.EndTime - caption.StartTime);
+
+                            string localImagePath = await imageGenService.GenerateAndSaveImageAsync(fullPrompt, userApiKey);
+                            imageSegments.Add((localImagePath, caption.StartTime, duration));
+                            generatedCount++;
+                        }
+                        catch (Exception imgEx)
+                        {
+                            Debug.WriteLine($"Failed to generate image segment: {imgEx.Message}");
+                        }
+
+                        // Wait 6 seconds between requests to maintain compliance with API rate limits (~10 RPM)
+                        if (i < captions.Count - 1)
+                        {
+                            await Task.Delay(6000);
+                        }
+                    }
+
+                    // Step 3: Add generated AI images onto the timeline
+                    imageGenService.AddImagesToMedia(imageSegments, mediaItems);
+                }
+
+                SyncListBox();
                 RefreshTimeline();
                 previewControl.Invalidate();
 
-                MessageBox.Show($"Successfully added {captions.Count} auto-captions to the timeline!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                string completionMessage = shouldGenerateImages
+                    ? $"Successfully created {captions.Count} captions and {generatedCount} matching AI images!"
+                    : $"Successfully created {captions.Count} captions!";
+
+                MessageBox.Show(completionMessage, "Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to generate captions:\n{ex.Message}", "Caption Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Failed during auto-generation:\n{ex.Message}", "Processing Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
