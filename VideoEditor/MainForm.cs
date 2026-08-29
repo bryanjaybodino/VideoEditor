@@ -267,24 +267,6 @@ namespace VideoEditor
                 }
             });
 
-            numBoxWidth.ValueChanged += (s, e) =>
-            {
-                if (!isBindingUI && previewControl.SelectedTextLabel != null)
-                {
-                    previewControl.SelectedTextLabel.Width = (float)numBoxWidth.Value;
-                    previewControl.Invalidate();
-                }
-            };
-
-            numBoxHeight.ValueChanged += (s, e) =>
-            {
-                if (!isBindingUI && previewControl.SelectedTextLabel != null)
-                {
-                    previewControl.SelectedTextLabel.Height = (float)numBoxHeight.Value;
-                    previewControl.Invalidate();
-                }
-            };
-
             numDuration.ValueChanged += NumDuration_ValueChanged;
             cbInEffect.SelectedIndexChanged += (s, e) => SaveAnimationSettings();
             numInDuration.ValueChanged += (s, e) => SaveAnimationSettings();
@@ -608,8 +590,6 @@ namespace VideoEditor
             if (label == null) return;
             isBindingUI = true;
             numFontSize.Value = (decimal)Math.Clamp(label.FontSize, 10, 120);
-            numBoxWidth.Value = (decimal)Math.Clamp(label.Width, 50, 1080);
-            numBoxHeight.Value = (decimal)Math.Clamp(label.Height, 30, 1920);
             isBindingUI = false;
         }
 
