@@ -486,6 +486,13 @@ namespace VideoEditor.Controls
 
         private void PreviewControl_MouseMove(object sender, MouseEventArgs e)
         {
+            if (!isResizingText && !isDraggingText &&
+                !isResizingBlur && !isDraggingBlur &&
+                !isResizingImage && !isDraggingImage)
+            {
+                UpdateHoverCursor(e.Location);
+                return;
+            }
             int deltaX = e.X - lastMousePos.X;
             int deltaY = e.Y - lastMousePos.Y;
 
@@ -502,6 +509,7 @@ namespace VideoEditor.Controls
             }
             else if (isDraggingText && selectedTextLabel != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
+                this.Cursor = Cursors.Hand;
                 float currentX = selectedTextLabel.RelativeX * LastCanvasWidth;
                 float currentY = selectedTextLabel.RelativeY * LastCanvasHeight;
 
@@ -526,6 +534,7 @@ namespace VideoEditor.Controls
             }
             else if (isDraggingBlur && SelectedItem?.BlurData != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
+                this.Cursor = Cursors.Hand;
                 var blur = SelectedItem.BlurData;
                 float currentX = blur.RelativeX * LastCanvasWidth;
                 float currentY = blur.RelativeY * LastCanvasHeight;
@@ -539,6 +548,7 @@ namespace VideoEditor.Controls
             }
             else if (isDraggingImage && selectedPreviewItem != null)
             {
+                this.Cursor = Cursors.Hand;
                 selectedPreviewItem.PositionX += deltaX * (1080f / LastCanvasWidth);
                 selectedPreviewItem.PositionY += deltaY * (1920f / LastCanvasHeight);
                 lastMousePos = e.Location;
@@ -559,6 +569,7 @@ namespace VideoEditor.Controls
 
         private void PreviewControl_MouseUp(object sender, MouseEventArgs e)
         {
+            this.Cursor = Cursors.Default;
             CommitTransformCommand();
             isResizingImage = false;
             isDraggingImage = false;
@@ -665,6 +676,111 @@ namespace VideoEditor.Controls
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
+        }
+        private void UpdateHoverCursor(Point mousePos)
+        {
+            int canvasX = (this.Width - LastCanvasWidth) / 2;
+            int canvasY = (this.Height - LastCanvasHeight) / 2;
+            int selectedTrack = TimelineRef?.SelectedTrackIndex ?? -1;
+            var timelineSelectedItem = TimelineRef?.SelectedItem;
+
+            var activeItems = allFrameItems
+                .Where(item => !IsItemLocked(item) &&
+                               currentTimePosition >= item.StartTime &&
+                               currentTimePosition < item.StartTime + item.Duration)
+                .OrderByDescending(item => item == timelineSelectedItem || item.TrackIndex == selectedTrack)
+                .ThenByDescending(item => item.TrackIndex)
+                .ThenByDescending(item => item.Type switch
+                {
+                    MediaType.Text => 3,
+                    MediaType.Blur => 2,
+                    MediaType.Image => 1,
+                    _ => 0
+                })
+                .ToList();
+
+            foreach (var item in activeItems)
+            {
+                // Check Text Overlays
+                if (item.Type == MediaType.Text && item.TextData != null)
+                {
+                    var label = item.TextData;
+                    float lX = canvasX + (label.RelativeX * LastCanvasWidth);
+                    float lY = canvasY + (label.RelativeY * LastCanvasHeight);
+                    float lW = label.RelativeWidth * LastCanvasWidth;
+                    float lH = label.RelativeHeight * LastCanvasHeight;
+
+                    RectangleF handleRect = new RectangleF(lX + lW - 10, lY + lH - 10, 20, 20);
+                    RectangleF boundsRect = new RectangleF(lX, lY, lW, lH);
+
+                    if (handleRect.Contains(mousePos))
+                    {
+                        this.Cursor = Cursors.SizeNWSE;
+                        return;
+                    }
+                    if (boundsRect.Contains(mousePos))
+                    {
+                        this.Cursor = Cursors.Hand;
+                        return;
+                    }
+                }
+                // Check Blur Overlays
+                else if (item.Type == MediaType.Blur && item.BlurData != null)
+                {
+                    var blur = item.BlurData;
+                    float bX = canvasX + (blur.RelativeX * LastCanvasWidth);
+                    float bY = canvasY + (blur.RelativeY * LastCanvasHeight);
+                    float bW = blur.RelativeWidth * LastCanvasWidth;
+                    float bH = blur.RelativeHeight * LastCanvasHeight;
+
+                    RectangleF handleRect = new RectangleF(bX + bW - 10, bY + bH - 10, 20, 20);
+                    RectangleF boundsRect = new RectangleF(bX, bY, bW, bH);
+
+                    if (handleRect.Contains(mousePos))
+                    {
+                        this.Cursor = Cursors.SizeNWSE;
+                        return;
+                    }
+                    if (boundsRect.Contains(mousePos))
+                    {
+                        this.Cursor = Cursors.Hand;
+                        return;
+                    }
+                }
+                // Check Image Overlays
+                else if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath))
+                {
+                    if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
+                    {
+                        float scale = Math.Max((float)LastCanvasWidth / img.Width, (float)LastCanvasHeight / img.Height) * item.Scale;
+                        int baseW = (int)(img.Width * scale);
+                        int baseH = (int)(img.Height * scale);
+
+                        float posX = item.PositionX * ((float)LastCanvasWidth / 1080f);
+                        float posY = item.PositionY * ((float)LastCanvasHeight / 1920f);
+
+                        int originX = canvasX + (LastCanvasWidth - baseW) / 2 + (int)posX;
+                        int originY = canvasY + (LastCanvasHeight - baseH) / 2 + (int)posY;
+
+                        RectangleF handleRect = new RectangleF(originX + baseW - 10, originY + baseH - 10, 20, 20);
+                        RectangleF imageBounds = new RectangleF(originX, originY, baseW, baseH);
+
+                        if (handleRect.Contains(mousePos))
+                        {
+                            this.Cursor = Cursors.SizeNWSE;
+                            return;
+                        }
+                        if (imageBounds.Contains(mousePos))
+                        {
+                            this.Cursor = Cursors.Hand;
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Default cursor when hovering empty canvas space
+            this.Cursor = Cursors.Default;
         }
     }
 }
