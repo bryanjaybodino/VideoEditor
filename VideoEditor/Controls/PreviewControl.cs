@@ -25,6 +25,7 @@ namespace VideoEditor.Controls
         private bool isResizingText = false;
         private bool isDraggingBlur = false;
         private bool isResizingBlur = false;
+        private bool isResizingImage = false;
         private Point lastMousePos;
 
         private TextTransformState initialTextTransform;
@@ -262,6 +263,9 @@ namespace VideoEditor.Controls
                 {
                     g.DrawRectangle(pen, originX, originY, baseW, baseH);
                 }
+
+                // Draw resize handle in bottom-right corner
+                g.FillRectangle(Brushes.Cyan, originX + baseW - 6, originY + baseH - 6, 12, 12);
             }
         }
 
@@ -414,13 +418,52 @@ namespace VideoEditor.Controls
                         int originX = canvasX + (LastCanvasWidth - baseW) / 2 + (int)posX;
                         int originY = canvasY + (LastCanvasHeight - baseH) / 2 + (int)posY;
 
+                        RectangleF handleRect = new RectangleF(originX + baseW - 10, originY + baseH - 10, 20, 20);
                         RectangleF imageBounds = new RectangleF(originX, originY, baseW, baseH);
 
-                        if (imageBounds.Contains(e.Location))
+                        if (handleRect.Contains(e.Location) || imageBounds.Contains(e.Location))
                         {
                             selectedPreviewItem = item;
                             SelectedItem = item;
-                            isDraggingImage = true;
+                            isResizingImage = handleRect.Contains(e.Location);
+                            isDraggingImage = !isResizingImage;
+                            lastMousePos = e.Location;
+
+                            initialImageTransform = new ImageTransformState
+                            {
+                                PositionX = item.PositionX,
+                                PositionY = item.PositionY,
+                                Scale = item.Scale
+                            };
+
+                            this.Invalidate();
+                            return;
+                        }
+                    }
+                }
+                else if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath))
+                {
+                    if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
+                    {
+                        float scale = Math.Max((float)LastCanvasWidth / img.Width, (float)LastCanvasHeight / img.Height) * item.Scale;
+                        int baseW = (int)(img.Width * scale);
+                        int baseH = (int)(img.Height * scale);
+
+                        float posX = item.PositionX * ((float)LastCanvasWidth / 1080f);
+                        float posY = item.PositionY * ((float)LastCanvasHeight / 1920f);
+
+                        int originX = canvasX + (LastCanvasWidth - baseW) / 2 + (int)posX;
+                        int originY = canvasY + (LastCanvasHeight - baseH) / 2 + (int)posY;
+
+                        RectangleF handleRect = new RectangleF(originX + baseW - 10, originY + baseH - 10, 20, 20);
+                        RectangleF imageBounds = new RectangleF(originX, originY, baseW, baseH);
+
+                        if (handleRect.Contains(e.Location) || imageBounds.Contains(e.Location))
+                        {
+                            selectedPreviewItem = item;
+                            SelectedItem = item;
+                            isResizingImage = handleRect.Contains(e.Location);
+                            isDraggingImage = !isResizingImage;
                             lastMousePos = e.Location;
 
                             initialImageTransform = new ImageTransformState
@@ -502,12 +545,22 @@ namespace VideoEditor.Controls
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
+            else if (isResizingImage && selectedPreviewItem != null)
+            {
+                // Uniform scale adjustment based on drag distance
+                float deltaScale = (deltaX + deltaY) * 0.005f;
+                selectedPreviewItem.Scale = Math.Clamp(selectedPreviewItem.Scale + deltaScale, 0.1f, 10.0f);
+
+                lastMousePos = e.Location;
+                ItemTransformChanged?.Invoke();
+                this.Invalidate();
+            }
         }
 
         private void PreviewControl_MouseUp(object sender, MouseEventArgs e)
         {
             CommitTransformCommand();
-
+            isResizingImage = false;
             isDraggingImage = false;
             isDraggingText = false;
             isResizingText = false;
@@ -565,7 +618,7 @@ namespace VideoEditor.Controls
                 initialBlurTransform = null;
             }
 
-            if (isDraggingImage && selectedPreviewItem != null && initialImageTransform != null)
+            if ((isDraggingImage || isResizingImage) && selectedPreviewItem != null && initialImageTransform != null)
             {
                 var newState = new ImageTransformState
                 {
