@@ -50,6 +50,7 @@ namespace VideoEditor
         private MediaItem currentPlayingAudioItem = null;
 
         private const int WM_KEYDOWN = 0x0100;
+
         public bool PreFilterMessage(ref Message m)
         {
             if (m.Msg == WM_KEYDOWN)
@@ -66,12 +67,11 @@ namespace VideoEditor
                     return true;
                 }
             }
-            return false; // Pass other messages along
+            return false;
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
-            // Unregister to prevent memory leaks
             Application.RemoveMessageFilter(this);
             base.OnFormClosed(e);
         }
@@ -93,9 +93,7 @@ namespace VideoEditor
 
             this.WindowState = FormWindowState.Maximized;
 
-            // Register the message filter when the form loads
             Application.AddMessageFilter(this);
-
 
             LoadProjectState();
         }
@@ -116,6 +114,7 @@ namespace VideoEditor
 
             return base.ProcessCmdKey(ref msg, keyData);
         }
+
         private void Undo()
         {
             if (undoRedoManager.CanUndo)
@@ -150,9 +149,9 @@ namespace VideoEditor
             base.OnHandleCreated(e);
             ApplyDarkModeTheme(this);
         }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            // Auto-save work state before exit
             SaveProjectState();
             base.OnFormClosing(e);
         }
@@ -204,7 +203,7 @@ namespace VideoEditor
                     TextData = newLabel
                 };
 
-                var command = new VideoEditor.Commands.AddMediaItemCommand(mediaItems, textMediaItem);
+                var command = new AddMediaItemCommand(mediaItems, textMediaItem);
                 undoRedoManager.ExecuteCommand(command);
 
                 SyncListBox();
@@ -244,7 +243,7 @@ namespace VideoEditor
                     BlurData = newBlur
                 };
 
-                var command = new VideoEditor.Commands.AddMediaItemCommand(mediaItems, blurMediaItem);
+                var command = new AddMediaItemCommand(mediaItems, blurMediaItem);
                 undoRedoManager.ExecuteCommand(command);
 
                 SyncListBox();
@@ -334,7 +333,6 @@ namespace VideoEditor
                 previewControl.RenderFrame(mediaItems, timelineControl.CurrentTime);
             };
 
-            // Example assuming you added a button named btnClearAll in Designer
             btnClearAll.Click += (s, e) =>
             {
                 var confirm = MessageBox.Show(
@@ -348,16 +346,14 @@ namespace VideoEditor
                 {
                     PausePlayback();
 
-                    // Clear active items
                     mediaItems.Clear();
-                    undoRedoManager = new UndoRedoManager(); // Reset undo history
+                    undoRedoManager = new UndoRedoManager();
                     timelineControl.UndoRedoManager = undoRedoManager;
                     previewControl.UndoRedoManager = undoRedoManager;
 
                     timelineControl.CurrentTime = 0;
                     timelineControl.SelectItem(null);
 
-                    // Delete auto-save file from disk
                     if (File.Exists(AutoSaveFilePath))
                     {
                         try { File.Delete(AutoSaveFilePath); } catch { }
@@ -384,7 +380,7 @@ namespace VideoEditor
             {
                 if (keyForm.ShowDialog(this) != DialogResult.OK) return;
                 userApiKey = keyForm.ApiKey;
-                shouldGenerateImages = false;// Temporary unavailable //keyForm.GenerateImages;
+                shouldGenerateImages = false;
             }
 
             var imageGenService = new ImageGenerationService();
@@ -395,7 +391,6 @@ namespace VideoEditor
                 btnAutoCaption.Text = "Transcribing Speech...";
                 Cursor = Cursors.WaitCursor;
 
-                // Step 1: Transcribe audio to get captions
                 var captions = await captionService.TranscribeAudioWithGemini(audioItem.FilePath, userApiKey);
                 if (captions.Count == 0)
                 {
@@ -403,11 +398,9 @@ namespace VideoEditor
                     return;
                 }
 
-                // Add captions onto the visual timeline
                 captionService.AddCaptionsToMedia(captions, mediaItems);
-                
+
                 int generatedCount = 0;
-                // Step 2: Directly generate images using caption text
                 if (shouldGenerateImages)
                 {
                     var imageSegments = new List<(string FilePath, double StartTime, double Duration)>();
@@ -431,14 +424,12 @@ namespace VideoEditor
                             Debug.WriteLine($"Failed to generate image segment: {imgEx.Message}");
                         }
 
-                        // Wait 6 seconds between requests to maintain compliance with API rate limits (~10 RPM)
                         if (i < captions.Count - 1)
                         {
                             await Task.Delay(6000);
                         }
                     }
 
-                    // Step 3: Add generated AI images onto the timeline
                     imageGenService.AddImagesToMedia(imageSegments, mediaItems);
                 }
 
@@ -786,7 +777,7 @@ namespace VideoEditor
             {
                 double newDuration = (double)numDuration.Value;
 
-                var command = new VideoEditor.Commands.ChangeDurationCommand(item, item.Duration, newDuration);
+                var command = new ChangeDurationCommand(item, item.Duration, newDuration);
                 undoRedoManager.ExecuteCommand(command);
 
                 if (item.Type == MediaType.Image)
@@ -859,7 +850,7 @@ namespace VideoEditor
                 OutEffect = new TransitionEffect { Type = "DynamicZoomBlur", Duration = halfDuration }
             };
 
-            var command = new VideoEditor.Commands.AddMediaItemCommand(mediaItems, item);
+            var command = new AddMediaItemCommand(mediaItems, item);
             undoRedoManager.ExecuteCommand(command);
 
             SyncListBox();
@@ -927,6 +918,7 @@ namespace VideoEditor
             isBindingUI = false;
         }
 
+        // FIX: Group multi-step split operations inside BatchCommand
         private void SplitSelectedClip()
         {
             double currentTime = timelineControl.CurrentTime;
@@ -934,16 +926,15 @@ namespace VideoEditor
 
             if (!itemsToSplit.Any()) return;
 
-            // Use BatchCommand or process each selected item
+            var batchCommands = new List<IUndoableCommand>();
+
             foreach (var item in itemsToSplit)
             {
-                // Check if the current playhead time falls strictly within the item's duration
                 if (currentTime <= item.StartTime || currentTime >= item.StartTime + item.Duration)
                     continue;
 
                 double splitOffset = currentTime - item.StartTime;
 
-                // Create right split item
                 var rightItem = new MediaItem
                 {
                     FilePath = item.FilePath,
@@ -979,23 +970,24 @@ namespace VideoEditor
                     } : null
                 };
 
-                // Resize the left item
-                var changeDurationCmd = new ChangeDurationCommand(item, item.Duration, splitOffset);
-                undoRedoManager.ExecuteCommand(changeDurationCmd);
-
-                // Add the right item
-                var addCmd = new AddMediaItemCommand(mediaItems, rightItem);
-                undoRedoManager.ExecuteCommand(addCmd);
+                batchCommands.Add(new ChangeDurationCommand(item, item.Duration, splitOffset));
+                batchCommands.Add(new AddMediaItemCommand(mediaItems, rightItem));
             }
 
-            SyncListBox();
-            RefreshTimeline();
+            if (batchCommands.Any())
+            {
+                undoRedoManager.ExecuteCommand(new BatchCommand(batchCommands));
+                SyncListBox();
+                RefreshTimeline();
+            }
         }
 
+        // FIX: Convert direct mutations into TrimMediaItemCommand and wrap in BatchCommand
         private void SplitLeftSelectedClip()
         {
             double currentTime = timelineControl.CurrentTime;
             var itemsToSplit = timelineControl.SelectedItems.ToList();
+            var batchCommands = new List<IUndoableCommand>();
 
             foreach (var item in itemsToSplit)
             {
@@ -1005,35 +997,47 @@ namespace VideoEditor
                 double offset = currentTime - item.StartTime;
                 double newDuration = item.Duration - offset;
 
-                // Truncate left side: move start time to current playhead and shorten duration
-                item.StartTime = currentTime;
-                item.Duration = newDuration;
-                item.SourceOffset += offset;
+                var trimCmd = new TrimMediaItemCommand(
+                    item,
+                    item.StartTime, currentTime,
+                    item.Duration, newDuration,
+                    item.SourceOffset, item.SourceOffset + offset
+                );
+
+                batchCommands.Add(trimCmd);
             }
 
-            SyncListBox();
-            RefreshTimeline();
+            if (batchCommands.Any())
+            {
+                undoRedoManager.ExecuteCommand(new BatchCommand(batchCommands));
+                SyncListBox();
+                RefreshTimeline();
+            }
         }
 
         private void SplitRightSelectedClip()
         {
             double currentTime = timelineControl.CurrentTime;
             var itemsToSplit = timelineControl.SelectedItems.ToList();
+            var batchCommands = new List<IUndoableCommand>();
 
             foreach (var item in itemsToSplit)
             {
                 if (currentTime <= item.StartTime || currentTime >= item.StartTime + item.Duration)
                     continue;
 
-                // Truncate right side: keep start time and trim duration to playhead offset
                 double newDuration = currentTime - item.StartTime;
-                var cmd = new ChangeDurationCommand(item, item.Duration, newDuration);
-                undoRedoManager.ExecuteCommand(cmd);
+                batchCommands.Add(new ChangeDurationCommand(item, item.Duration, newDuration));
             }
 
-            SyncListBox();
-            RefreshTimeline();
+            if (batchCommands.Any())
+            {
+                undoRedoManager.ExecuteCommand(new BatchCommand(batchCommands));
+                SyncListBox();
+                RefreshTimeline();
+            }
         }
+
         private void RefreshTimeline()
         {
             timelineControl.Invalidate();
@@ -1108,10 +1112,6 @@ namespace VideoEditor
             return 120.0;
         }
 
-
-
-
-        // Add path constant near top of class
         private string AutoSaveFilePath => Path.Combine(Application.StartupPath, "project_autosave.json");
 
         private void SaveProjectState()
@@ -1146,12 +1146,10 @@ namespace VideoEditor
                     {
                         this.mediaItems = saveData.MediaItems;
 
-                        // Fix deserialized text properties
                         foreach (var item in this.mediaItems)
                         {
                             if (item.Type == MediaType.Text)
                             {
-                                // 1. Repair TextData if it deserialized with 0 alpha opacity
                                 if (item.TextData != null)
                                 {
                                     if (item.TextData.TextColor.A == 0)
@@ -1161,12 +1159,10 @@ namespace VideoEditor
                                         item.TextData.BackgroundColor = Color.FromArgb(128, 0, 0, 0);
                                 }
 
-                                // 2. Ensure TextLabels list contains TextData if your renderer uses TextLabels
                                 if (item.TextData != null && (item.TextLabels == null || item.TextLabels.Count == 0))
                                 {
                                     item.TextLabels = new List<TextLabel> { item.TextData };
                                 }
-                                // 3. Ensure TextData is set if your renderer uses TextData
                                 else if (item.TextData == null && item.TextLabels != null && item.TextLabels.Count > 0)
                                 {
                                     item.TextData = item.TextLabels[0];
@@ -1189,6 +1185,7 @@ namespace VideoEditor
                 Debug.WriteLine($"Failed to restore auto-save state: {ex.Message}");
             }
         }
+
         private void RightPanel_SizeChanged(object sender, EventArgs e)
         {
             int targetWidth = rightPanel.ClientSize.Width - rightPanel.Padding.Left - rightPanel.Padding.Right - 20;

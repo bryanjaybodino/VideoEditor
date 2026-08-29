@@ -237,19 +237,8 @@ namespace VideoEditor.Controls
         {
             if (sourceTrackIndex == targetTrackIndex) return;
 
-            foreach (var item in mediaItems)
-            {
-                if (item.Type == MediaType.Audio) continue;
-
-                if (item.TrackIndex == sourceTrackIndex)
-                {
-                    item.TrackIndex = targetTrackIndex;
-                }
-                else if (item.TrackIndex == targetTrackIndex)
-                {
-                    item.TrackIndex = sourceTrackIndex;
-                }
-            }
+            var command = new MoveTrackRowCommand(mediaItems, sourceTrackIndex, targetTrackIndex);
+            UndoRedoManager?.ExecuteCommand(command);
 
             SelectedTrackIndex = targetTrackIndex;
             this.Invalidate();
