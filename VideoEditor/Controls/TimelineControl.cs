@@ -55,6 +55,11 @@ namespace VideoEditor.Controls
 
         public MediaItem SelectedItem { get; private set; }
 
+        private const double SnapThresholdPixels = 10; // Distance in pixels to trigger snap/stop
+        private const double BreakoutThresholdPixels = 25; // Drag distance required past edge to force continue
+        private bool isSnappedToBoundary = false;
+        private double targetSnapTime = 0;
+
         public double CurrentTime
         {
             get => currentTime;
@@ -493,6 +498,7 @@ namespace VideoEditor.Controls
 
                     if (e.X >= (x + width - EdgeMargin) && e.X <= (x + width + EdgeMargin))
                     {
+                        isSnappedToBoundary = false;
                         isResizingClip = true;
                     }
                     else
@@ -517,16 +523,77 @@ namespace VideoEditor.Controls
 
             if (isDraggingPlayhead)
             {
+                this.Cursor = Cursors.Default;
                 CurrentTime = Math.Max(0, (e.X - leftPanelWidth + scrollX) / pixelsPerSecond);
             }
             else if (isResizingClip && activeClip != null)
             {
-                double newDuration = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - activeClip.StartTime;
-                activeClip.Duration = Math.Max(0.5, newDuration);
+                this.Cursor = Cursors.SizeWE;
+
+                // Calculate raw target duration based on cursor position
+                double rawDuration = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - activeClip.StartTime;
+                double candidateDuration = Math.Max(0.5, rawDuration);
+                double candidateEndTime = activeClip.StartTime + candidateDuration;
+
+                // Find closest clip on the same track that starts AFTER the current clip
+                var nextClip = mediaItems
+                    .Where(item => item != activeClip &&
+                                   item.TrackIndex == activeClip.TrackIndex &&
+                                   item.Type == activeClip.Type &&
+                                   item.StartTime >= activeClip.StartTime)
+                    .OrderBy(item => item.StartTime)
+                    .FirstOrDefault();
+
+                if (nextClip != null)
+                {
+                    double obstacleStartTime = nextClip.StartTime;
+
+                    // Convert distance to pixels for intuitive snapping across different zoom levels
+                    double pixelDiff = (candidateEndTime - obstacleStartTime) * pixelsPerSecond;
+                    double snapDistancePx = SnapThresholdPixels;
+                    double breakoutDistancePx = BreakoutThresholdPixels;
+
+                    if (!isSnappedToBoundary)
+                    {
+                        // Check if we hit or crossed the neighbor's boundary
+                        if (pixelDiff >= -snapDistancePx && pixelDiff <= breakoutDistancePx)
+                        {
+                            isSnappedToBoundary = true;
+                            targetSnapTime = obstacleStartTime;
+                            candidateDuration = Math.Max(0.5, targetSnapTime - activeClip.StartTime);
+                        }
+                    }
+                    else
+                    {
+                        // Currently snapped: check if user pulled back before boundary OR pushed far enough to force through
+                        if (pixelDiff < -snapDistancePx)
+                        {
+                            // Pulled mouse back
+                            isSnappedToBoundary = false;
+                        }
+                        else if (pixelDiff > breakoutDistancePx)
+                        {
+                            // User forced through the obstacle
+                            isSnappedToBoundary = false;
+                        }
+                        else
+                        {
+                            // Hold at the boundary edge
+                            candidateDuration = Math.Max(0.5, targetSnapTime - activeClip.StartTime);
+                        }
+                    }
+                }
+                else
+                {
+                    isSnappedToBoundary = false;
+                }
+
+                activeClip.Duration = candidateDuration;
                 this.Invalidate();
             }
             else if (isDraggingClip && activeClip != null)
             {
+                this.Cursor = Cursors.Default;
                 double newStart = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - clipDragOffset;
                 activeClip.StartTime = Math.Max(0, newStart);
 
@@ -542,6 +609,37 @@ namespace VideoEditor.Controls
                 }
 
                 this.Invalidate();
+            }
+            else
+            {
+                // Hover Detection for Resize Handles
+                bool isOverResizeEdge = false;
+                int hoveredTrackIndex = GetTrackIndexFromY(e.Y, MediaType.Image);
+                bool isAudioRowHovered = (e.Y >= GetTrackY(0, MediaType.Audio));
+
+                var hoveredItems = mediaItems
+                    .Where(item => isAudioRowHovered
+                        ? item.Type == MediaType.Audio
+                        : item.TrackIndex == hoveredTrackIndex && item.Type != MediaType.Audio);
+
+                foreach (var item in hoveredItems)
+                {
+                    if (lockedTracks.Contains(item.TrackIndex) && item.Type != MediaType.Audio) continue;
+
+                    int y = GetTrackY(item.TrackIndex, item.Type);
+                    int x = leftPanelWidth + (int)(item.StartTime * pixelsPerSecond) - scrollX;
+                    int width = (int)(item.Duration * pixelsPerSecond);
+                    var rect = new Rectangle(x, y, Math.Max(width, 15), trackHeight);
+
+                    // Check if cursor is on the right edge handle
+                    if (rect.Contains(e.Location) && e.X >= (x + width - EdgeMargin) && e.X <= (x + width + EdgeMargin))
+                    {
+                        isOverResizeEdge = true;
+                        break;
+                    }
+                }
+
+                this.Cursor = isOverResizeEdge ? Cursors.SizeWE : Cursors.Default;
             }
         }
 
@@ -564,14 +662,14 @@ namespace VideoEditor.Controls
                     UndoRedoManager?.ExecuteCommand(cmd);
                 }
             }
-
+            isSnappedToBoundary = false;
             isDraggingPlayhead = false;
             isDraggingClip = false;
             isResizingClip = false;
             activeClip = null;
+            this.Cursor = Cursors.Default;
             this.Invalidate();
         }
-
         private void Timeline_MouseWheel(object sender, MouseEventArgs e)
         {
             int leftPanelWidth = 80;
