@@ -6,6 +6,28 @@ using VideoEditor.Controls;
 
 namespace VideoEditor
 {
+    public class DarkListBox : ListBox
+    {
+        [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubSubAppName);
+
+        [DllImport("dwmapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+
+            if (Environment.OSVersion.Version.Major >= 10)
+            {
+                int useDarkMode = 1;
+                DwmSetWindowAttribute(this.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDarkMode, sizeof(int));
+                SetWindowTheme(this.Handle, "DarkMode_Explorer", null);
+            }
+        }
+    }
     // Custom FlowLayoutPanel that forces native dark mode scrollbars on Windows 10/11
     public class DarkScrollPanel : FlowLayoutPanel
     {
@@ -69,7 +91,7 @@ namespace VideoEditor
             btnExport = new Button();
             btnClearAll = new Button();
             leftPanel = new Panel();
-            mediaListBox = new ListBox();
+            mediaListBox = new DarkListBox();
             previewControl = new PreviewControl();
             rightPanel = new DarkScrollPanel();
             lblSidebarTitle = new Label();
@@ -611,12 +633,13 @@ namespace VideoEditor
             // btnPlayPause
             // 
             btnPlayPause.AccessibleName = "";
-            btnPlayPause.BackColor = Color.FromArgb(48, 48, 48);
+            btnPlayPause.BackColor = Color.FromArgb(83, 168, 83);
             btnPlayPause.Dock = DockStyle.Fill;
             btnPlayPause.FlatAppearance.BorderSize = 0;
             btnPlayPause.FlatStyle = FlatStyle.Flat;
             btnPlayPause.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
             btnPlayPause.ForeColor = Color.White;
+            btnPlayPause.Location = new Point(1, 1);
             btnPlayPause.Margin = new Padding(1);
             btnPlayPause.Name = "btnPlayPause";
             btnPlayPause.Size = new Size(190, 33);
@@ -632,6 +655,7 @@ namespace VideoEditor
             btnSplitLeft.FlatStyle = FlatStyle.Flat;
             btnSplitLeft.Font = new Font("Segoe UI", 8.5F);
             btnSplitLeft.ForeColor = Color.FromArgb(240, 240, 240);
+            btnSplitLeft.Location = new Point(193, 1);
             btnSplitLeft.Margin = new Padding(1);
             btnSplitLeft.Name = "btnSplitLeft";
             btnSplitLeft.Size = new Size(190, 33);
@@ -647,6 +671,7 @@ namespace VideoEditor
             btnSplit.FlatStyle = FlatStyle.Flat;
             btnSplit.Font = new Font("Segoe UI", 8.5F);
             btnSplit.ForeColor = Color.FromArgb(240, 240, 240);
+            btnSplit.Location = new Point(385, 1);
             btnSplit.Margin = new Padding(1);
             btnSplit.Name = "btnSplit";
             btnSplit.Size = new Size(190, 33);
@@ -662,9 +687,10 @@ namespace VideoEditor
             btnSplitRight.FlatStyle = FlatStyle.Flat;
             btnSplitRight.Font = new Font("Segoe UI", 8.5F);
             btnSplitRight.ForeColor = Color.FromArgb(240, 240, 240);
+            btnSplitRight.Location = new Point(577, 1);
             btnSplitRight.Margin = new Padding(1);
             btnSplitRight.Name = "btnSplitRight";
-            btnSplitRight.Size = new Size(191, 33);
+            btnSplitRight.Size = new Size(192, 33);
             btnSplitRight.TabIndex = 3;
             btnSplitRight.Text = "➡ Trim Right";
             btnSplitRight.UseVisualStyleBackColor = false;
@@ -719,35 +745,6 @@ namespace VideoEditor
             ResumeLayout(false);
         }
 
-        private void RightPanel_SizeChanged(object sender, EventArgs e)
-        {
-            int targetWidth = rightPanel.ClientSize.Width - rightPanel.Padding.Left - rightPanel.Padding.Right - 20;
-            if (targetWidth <= 0) return;
-
-            int halfWidth = (targetWidth - 8) / 2;
-            btnAddText.Width = targetWidth;
-            numFontSize.Width = targetWidth;
-
-            btnTextColor.Width = halfWidth;
-            btnBgColor.Width = halfWidth;
-            colorFlow.Width = targetWidth;
-
-            btnBlurOverlay.Width = targetWidth;
-            lblDivider3.Width = targetWidth;
-
-            numDuration.Width = targetWidth;
-
-            int effectWidth = (int)(targetWidth * 0.6);
-            int durationWidth = targetWidth - effectWidth - 8;
-
-            cbInEffect.Width = effectWidth;
-            numInDuration.Width = durationWidth;
-            inAnimFlow.Width = targetWidth;
-
-            cbOutEffect.Width = effectWidth;
-            numOutDuration.Width = durationWidth;
-            outAnimFlow.Width = targetWidth;
-        }
 
         #endregion
 
@@ -758,7 +755,6 @@ namespace VideoEditor
         private Button btnAutoCaption;
         private Button btnExport;
         private Panel leftPanel;
-        private ListBox mediaListBox;
         private PreviewControl previewControl;
         private DarkScrollPanel rightPanel;
         private Label lblSidebarTitle;
@@ -792,5 +788,6 @@ namespace VideoEditor
         private Panel timelineHeaderRight;
         private TimelineControl timelineControl;
         private Button btnClearAll;
+        private DarkListBox mediaListBox;
     }
 }

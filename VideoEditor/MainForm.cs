@@ -1138,11 +1138,42 @@ namespace VideoEditor
                     if (saveData != null && saveData.MediaItems != null)
                     {
                         this.mediaItems = saveData.MediaItems;
+
+                        // Fix deserialized text properties
+                        foreach (var item in this.mediaItems)
+                        {
+                            if (item.Type == MediaType.Text)
+                            {
+                                // 1. Repair TextData if it deserialized with 0 alpha opacity
+                                if (item.TextData != null)
+                                {
+                                    if (item.TextData.TextColor.A == 0)
+                                        item.TextData.TextColor = Color.White;
+
+                                    if (item.TextData.BackgroundColor.A == 0)
+                                        item.TextData.BackgroundColor = Color.FromArgb(128, 0, 0, 0);
+                                }
+
+                                // 2. Ensure TextLabels list contains TextData if your renderer uses TextLabels
+                                if (item.TextData != null && (item.TextLabels == null || item.TextLabels.Count == 0))
+                                {
+                                    item.TextLabels = new List<TextLabel> { item.TextData };
+                                }
+                                // 3. Ensure TextData is set if your renderer uses TextData
+                                else if (item.TextData == null && item.TextLabels != null && item.TextLabels.Count > 0)
+                                {
+                                    item.TextData = item.TextLabels[0];
+                                }
+                            }
+                        }
+
                         timelineControl.SetMediaItems(this.mediaItems);
                         timelineControl.CurrentTime = saveData.CurrentTime;
 
                         SyncListBox();
                         RefreshTimeline();
+
+                        previewControl.RenderFrame(this.mediaItems, timelineControl.CurrentTime);
                     }
                 }
             }
@@ -1150,6 +1181,35 @@ namespace VideoEditor
             {
                 Debug.WriteLine($"Failed to restore auto-save state: {ex.Message}");
             }
+        }
+        private void RightPanel_SizeChanged(object sender, EventArgs e)
+        {
+            int targetWidth = rightPanel.ClientSize.Width - rightPanel.Padding.Left - rightPanel.Padding.Right - 20;
+            if (targetWidth <= 0) return;
+
+            int halfWidth = (targetWidth - 8) / 2;
+            btnAddText.Width = targetWidth;
+            numFontSize.Width = targetWidth;
+
+            btnTextColor.Width = halfWidth;
+            btnBgColor.Width = halfWidth;
+            colorFlow.Width = targetWidth;
+
+            btnBlurOverlay.Width = targetWidth;
+            lblDivider3.Width = targetWidth;
+
+            numDuration.Width = targetWidth;
+
+            int effectWidth = (int)(targetWidth * 0.6);
+            int durationWidth = targetWidth - effectWidth - 8;
+
+            cbInEffect.Width = effectWidth;
+            numInDuration.Width = durationWidth;
+            inAnimFlow.Width = targetWidth;
+
+            cbOutEffect.Width = effectWidth;
+            numOutDuration.Width = durationWidth;
+            outAnimFlow.Width = targetWidth;
         }
     }
 }
