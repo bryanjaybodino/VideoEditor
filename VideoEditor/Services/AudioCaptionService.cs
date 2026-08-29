@@ -14,25 +14,24 @@ namespace VideoEditor.Services
     {
         private static readonly HttpClient httpClient = new HttpClient();
 
-        public async Task<List<Caption>> TranscribeAudioWithGemini(string audioFilePath,string ApiKey)
+        public async Task<List<Caption>> TranscribeAudioWithGemini(string audioFilePath, string ApiKey)
         {
             if (!File.Exists(audioFilePath))
             {
                 throw new FileNotFoundException("Audio file not found.", audioFilePath);
             }
 
-            // 1. Read local audio file bytes and encode to base64 for audio-to-text processing
             byte[] audioBytes = await File.ReadAllBytesAsync(audioFilePath);
             string base64Audio = Convert.ToBase64String(audioBytes);
             string mimeType = GetMimeType(audioFilePath);
 
-            // 2. Use stable Gemini endpoint
             string url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={ApiKey}";
 
+            // UPDATE 1: Explicitly ask for grouped phrases/sentences (3 to 8 words per segment)
             string prompt = "Listen to this audio file and transcribe the spoken words into text subtitles. " +
-                            "Break down the transcript into short, readable caption segments with accurate start and end timestamps in seconds.";
+                            "Group words into full sentences or natural phrasal chunks (3-8 words per line). " +
+                            "Do NOT transcribe word-by-word. Provide accurate start and end timestamps for each group.";
 
-            // 3. Request structured JSON output directly from Gemini
             var requestBody = new
             {
                 contents = new[]
@@ -56,17 +55,23 @@ namespace VideoEditor.Services
                 generationConfig = new
                 {
                     response_mime_type = "application/json",
+                    // UPDATE 2: Provide descriptions inside the JSON schema to enforce chunking behavior
                     response_schema = new
                     {
                         type = "ARRAY",
+                        description = "List of full phrase or sentence caption segments.",
                         items = new
                         {
                             type = "OBJECT",
                             properties = new
                             {
-                                text = new { type = "STRING" },
-                                start = new { type = "NUMBER" },
-                                end = new { type = "NUMBER" }
+                                text = new
+                                {
+                                    type = "STRING",
+                                    description = "A grouped line of spoken text containing multiple words or full sentences."
+                                },
+                                start = new { type = "NUMBER", description = "Start timestamp in seconds for the sentence or phrase." },
+                                end = new { type = "NUMBER", description = "End timestamp in seconds for the sentence or phrase." }
                             },
                             required = new[] { "text", "start", "end" }
                         }

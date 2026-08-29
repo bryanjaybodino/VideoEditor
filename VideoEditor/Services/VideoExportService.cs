@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -16,8 +17,6 @@ namespace VideoEditor.Services
     {
         private const int OutputWidth = 1080;
         private const int OutputHeight = 1920;
-
-        // 1. Drop FPS to 30 to cut total frame rendering work in half (120 frames instead of 240 for 4s)
         private const int TargetFps = 30;
 
         private static readonly Dictionary<string, Bitmap> ExportBitmapCache = new Dictionary<string, Bitmap>();
@@ -52,28 +51,31 @@ namespace VideoEditor.Services
                     throw new Exception("No image clips found to export.");
 
                 double totalDuration = items.Max(x => x.StartTime + x.Duration);
-                int totalFrames = (int)(totalDuration * TargetFps);
+                int totalFrames = (int)Math.Ceiling(totalDuration * TargetFps);
 
                 if (totalFrames <= 0)
                     throw new Exception("Total video duration is invalid or 0 seconds.");
 
                 string tempOutputFile = Path.Combine(Path.GetTempPath(), $"export_{Guid.NewGuid():N}.mp4");
 
-                string audioArgs = "";
+                string totalDurationStr = totalDuration.ToString("0.00", CultureInfo.InvariantCulture);
+
+                string audioInputs = "";
+                string audioMapping = "-map 0:v:0";
+
                 if (audioItem != null && File.Exists(audioItem.FilePath))
                 {
                     double audioDuration = Math.Min(audioItem.Duration, totalDuration - audioItem.StartTime);
-                    audioArgs = $"-ss {audioItem.StartTime.ToString(System.Globalization.CultureInfo.InvariantCulture)} -t {audioDuration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -i \"{audioItem.FilePath}\" -map 0:v -map 1:a -c:a aac -b:a 192k";
-                }
-                else
-                {
-                    audioArgs = "-map 0:v";
+                    string ssStr = audioItem.StartTime.ToString("0.00", CultureInfo.InvariantCulture);
+                    string durStr = audioDuration.ToString("0.00", CultureInfo.InvariantCulture);
+
+                    audioInputs = $"-ss {ssStr} -t {durStr} -i \"{audioItem.FilePath}\"";
+                    audioMapping = "-map 0:v:0 -map 1:a:0 -c:a aac -b:a 192k -shortest";
                 }
 
-                // Added fast FFmpeg encoding flags (-threads 0 and -tune zerolatency)
-                string arguments = $"-y -f rawvideo -vcodec rawvideo -s {OutputWidth}x{OutputHeight} -pix_fmt bgr24 -r {TargetFps} -i - {audioArgs} -t {totalDuration.ToString(System.Globalization.CultureInfo.InvariantCulture)} -c:v libx264 -preset ultrafast -tune zerolatency -threads 0 -crf 23 -pix_fmt yuv420p \"{tempOutputFile}\"";
+                string arguments = $"-y -f rawvideo -pix_fmt bgr24 -s {OutputWidth}x{OutputHeight} -r {TargetFps} -i - {audioInputs} {audioMapping} -t {totalDurationStr} -c:v libx264 -preset ultrafast -pix_fmt yuv420p \"{tempOutputFile}\"";
 
-                await Task.Run(() =>
+                await Task.Run(async () =>
                 {
                     var psi = new ProcessStartInfo
                     {
@@ -85,15 +87,19 @@ namespace VideoEditor.Services
                         CreateNoWindow = true
                     };
 
-                    var errorBuilder = new StringBuilder();
+                    var errorLog = new StringBuilder();
 
                     using (var process = new Process { StartInfo = psi })
                     {
+                        // Continuously read standard error to avoid pipe deadlock buffers filling up
                         process.ErrorDataReceived += (s, e) =>
                         {
                             if (!string.IsNullOrEmpty(e.Data))
                             {
-                                errorBuilder.AppendLine(e.Data);
+                                lock (errorLog)
+                                {
+                                    errorLog.AppendLine(e.Data);
+                                }
                             }
                         };
 
@@ -104,7 +110,6 @@ namespace VideoEditor.Services
                         using (Bitmap frameBuffer = new Bitmap(OutputWidth, OutputHeight, PixelFormat.Format24bppRgb))
                         using (Graphics g = Graphics.FromImage(frameBuffer))
                         {
-                            // Optimized quality/speed balance
                             g.InterpolationMode = InterpolationMode.Bilinear;
                             g.SmoothingMode = SmoothingMode.HighSpeed;
                             g.PixelOffsetMode = PixelOffsetMode.HighSpeed;
@@ -116,7 +121,9 @@ namespace VideoEditor.Services
                             {
                                 if (process.HasExited)
                                 {
-                                    throw new Exception($"FFmpeg closed unexpectedly at frame {frame}/{totalFrames}.\nError Output:\n{errorBuilder}");
+                                    string err;
+                                    lock (errorLog) { err = errorLog.ToString(); }
+                                    throw new Exception($"FFmpeg exited prematurely at frame {frame}/{totalFrames}.\nLog Output:\n{err}");
                                 }
 
                                 double timeInSeconds = (double)frame / TargetFps;
@@ -132,7 +139,13 @@ namespace VideoEditor.Services
                                 try
                                 {
                                     System.Runtime.InteropServices.Marshal.Copy(bmpData.Scan0, frameBytes, 0, frameBytes.Length);
-                                    ffmpegIn.Write(frameBytes, 0, frameBytes.Length);
+                                    await ffmpegIn.WriteAsync(frameBytes, 0, frameBytes.Length);
+                                }
+                                catch (Exception ex)
+                                {
+                                    string err;
+                                    lock (errorLog) { err = errorLog.ToString(); }
+                                    throw new Exception($"Failed to write frame {frame}/{totalFrames} to pipe.\nLog Output:\n{err}", ex);
                                 }
                                 finally
                                 {
@@ -143,15 +156,21 @@ namespace VideoEditor.Services
                                 progress?.Report(percent);
                             }
 
-                            ffmpegIn.Flush();
-                            ffmpegIn.Close();
+                            try
+                            {
+                                await ffmpegIn.FlushAsync();
+                                ffmpegIn.Close();
+                            }
+                            catch { }
                         }
 
                         process.WaitForExit();
 
                         if (process.ExitCode != 0)
                         {
-                            throw new Exception($"FFmpeg Export Failed with Exit Code {process.ExitCode}:\n{errorBuilder}");
+                            string err;
+                            lock (errorLog) { err = errorLog.ToString(); }
+                            throw new Exception($"FFmpeg Export Failed (Exit Code {process.ExitCode}):\n{err}");
                         }
                     }
                 });
@@ -163,11 +182,24 @@ namespace VideoEditor.Services
 
                     File.Move(tempOutputFile, outputPath);
                 }
+                else
+                {
+                    throw new Exception("Export failed: Output MP4 file was not created.");
+                }
             }
             finally
             {
                 ClearExportCache();
             }
+        }
+
+        public static Bitmap GetExportImage(string filePath)
+        {
+            if (!string.IsNullOrEmpty(filePath) && ExportBitmapCache.TryGetValue(filePath, out var cachedBmp))
+            {
+                return cachedBmp;
+            }
+            return null;
         }
 
         private static void ClearExportCache()

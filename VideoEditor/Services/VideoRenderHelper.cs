@@ -14,13 +14,18 @@ namespace VideoEditor.Services
         private static readonly Dictionary<string, byte[]> ImageByteCache = new Dictionary<string, byte[]>();
         private static readonly object CacheLock = new object();
 
+        // Check RAM export cache first; fall back to disk/stream cache for UI preview
         public static Image GetCachedImage(string filePath)
         {
-            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
-                return null;
+            if (string.IsNullOrEmpty(filePath)) return null;
+
+            // Direct RAM lookup for fast export mode
+            var exportBmp = VideoExportService.GetExportImage(filePath);
+            if (exportBmp != null) return exportBmp;
+
+            if (!File.Exists(filePath)) return null;
 
             byte[] bytes;
-
             lock (CacheLock)
             {
                 if (!ImageByteCache.TryGetValue(filePath, out bytes))
@@ -30,12 +35,66 @@ namespace VideoEditor.Services
                 }
             }
 
-            // Creating a MemoryStream copy prevents file lock & GDI+ thread conflicts
             using (var ms = new MemoryStream(bytes))
             {
                 return Image.FromStream(ms);
             }
         }
+
+        public static Bitmap RenderExportFrame(List<MediaItem> allItems, double currentTime, int canvasWidth = 1080, int canvasHeight = 1920)
+        {
+            Bitmap frame = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(frame))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.Clear(Color.Black);
+
+                // Get active images and blurs sorted back-to-front by track index
+                var activeVisualItems = allItems
+                    .Where(i => (i.Type == MediaType.Image || (i.Type == MediaType.Blur && i.BlurData != null)) &&
+                                currentTime >= i.StartTime &&
+                                currentTime < i.StartTime + i.Duration)
+                    .OrderByDescending(i => i.TrackIndex);
+
+                foreach (var item in activeVisualItems)
+                {
+                    if (item.Type == MediaType.Image)
+                    {
+                        var img = GetCachedImage(item.FilePath);
+                        if (img != null)
+                        {
+                            DrawImageItem(g, img, item, currentTime, 0, 0, canvasWidth, canvasHeight);
+                        }
+
+                        if (item.TextLabels != null)
+                        {
+                            double localTime = currentTime - item.StartTime;
+                            foreach (var lbl in item.TextLabels.Where(l => localTime >= l.StartTime && localTime <= l.StartTime + l.Duration))
+                                DrawTextLabel(g, lbl, 0, 0, canvasWidth, canvasHeight);
+                        }
+                    }
+                    else if (item.Type == MediaType.Blur)
+                    {
+                        DrawBlurOverlay(g, item.BlurData, allItems, currentTime, 0, 0, canvasWidth, canvasHeight, item.TrackIndex);
+                    }
+                }
+
+                // Render standalone text overlays
+                var activeTextItems = allItems
+                    .Where(i => i.Type == MediaType.Text &&
+                                i.TextData != null &&
+                                currentTime >= i.StartTime &&
+                                currentTime < i.StartTime + i.Duration);
+
+                foreach (var textItem in activeTextItems)
+                {
+                    DrawTextLabel(g, textItem.TextData, 0, 0, canvasWidth, canvasHeight);
+                }
+            }
+            return frame;
+        }
+
         public static void DrawImageItem(Graphics g, Image img, MediaItem item, double currentTime, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
         {
             if (img == null || item == null) return;
@@ -43,11 +102,9 @@ namespace VideoEditor.Services
             double localTime = currentTime - item.StartTime;
             if (localTime < 0 || localTime > item.Duration) return;
 
-            // Transform state
             float opacity = 1.0f, scale = 1.0f, offsetX = 0f, offsetY = 0f;
             float blurAmount = 0f, blurAngleX = 0f, blurAngleY = 0f, waveAmount = 0f;
 
-            // Apply In / Out Animations
             if (localTime < item.InEffectDuration && item.InEffectDuration > 0)
                 ApplyEffect(item.InEffectType, (float)(localTime / item.InEffectDuration), true, ref opacity, ref scale, ref offsetX, ref offsetY, ref blurAmount, ref blurAngleX, ref blurAngleY, ref waveAmount, canvasWidth, canvasHeight);
 
@@ -55,7 +112,6 @@ namespace VideoEditor.Services
             if (timeRemaining < item.OutEffectDuration && item.OutEffectDuration > 0)
                 ApplyEffect(item.OutEffectType, (float)(timeRemaining / item.OutEffectDuration), false, ref opacity, ref scale, ref offsetX, ref offsetY, ref blurAmount, ref blurAngleX, ref blurAngleY, ref waveAmount, canvasWidth, canvasHeight);
 
-            // Bounds Calculation (REPLACE OLD SCALING LINES HERE)
             float scaleX = (float)canvasWidth / img.Width;
             float scaleY = (float)canvasHeight / img.Height;
             float finalScale = Math.Max(scaleX, scaleY) * item.Scale * scale;
@@ -69,10 +125,9 @@ namespace VideoEditor.Services
 
             Rectangle destRect = new Rectangle(x, y, w, h);
 
-            // Render Blur Passes
             if (blurAmount > 0.05f)
             {
-                int steps = 6;
+                int steps = 3;
                 float stepAlpha = (opacity / steps) * 0.7f;
                 for (int i = steps; i >= 1; i--)
                 {
@@ -123,21 +178,20 @@ namespace VideoEditor.Services
             g.DrawImage(img, bounds, 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attr);
         }
 
-
-
         public static void DrawBlurOverlay(Graphics g, BlurOverlay blur, List<MediaItem> allItems, double currentTime, int canvasX, int canvasY, int canvasWidth, int canvasHeight, int blurTrackIndex)
         {
             if (blur == null) return;
 
-            int bx = canvasX + (int)(blur.RelativeX * canvasWidth);
-            int by = canvasY + (int)(blur.RelativeY * canvasHeight);
-            int bw = (int)(blur.RelativeWidth * canvasWidth);
-            int bh = (int)(blur.RelativeHeight * canvasHeight);
+            float bx = canvasX + ((float)blur.RelativeX * canvasWidth);
+            float by = canvasY + ((float)blur.RelativeY * canvasHeight);
+            float bw = (float)blur.RelativeWidth * canvasWidth;
+            float bh = (float)blur.RelativeHeight * canvasHeight;
 
-            Rectangle blurRect = new Rectangle(bx, by, bw, bh);
-            blurRect.Intersect(new Rectangle(canvasX, canvasY, canvasWidth, canvasHeight));
+            RectangleF blurRectF = new RectangleF(bx, by, bw, bh);
+            RectangleF canvasRectF = new RectangleF(canvasX, canvasY, canvasWidth, canvasHeight);
+            blurRectF.Intersect(canvasRectF);
 
-            if (blurRect.Width <= 0 || blurRect.Height <= 0) return;
+            if (blurRectF.Width <= 0 || blurRectF.Height <= 0) return;
 
             var underlyingImages = allItems
                 .Where(i => i.Type == MediaType.Image &&
@@ -149,22 +203,25 @@ namespace VideoEditor.Services
 
             if (!underlyingImages.Any()) return;
 
-            // Fast 1/16th scale resampling (Bypasses slow CPU memory loops)
-            int tinyW = Math.Max(4, blurRect.Width / 16);
-            int tinyH = Math.Max(4, blurRect.Height / 16);
+            float scaleFactor = 0.0625f;
+            int tinyW = Math.Max(8, (int)Math.Round(blurRectF.Width * scaleFactor));
+            int tinyH = Math.Max(8, (int)Math.Round(blurRectF.Height * scaleFactor));
 
             using (Bitmap tinyBmp = new Bitmap(tinyW, tinyH, PixelFormat.Format32bppArgb))
             {
                 using (Graphics tinyG = Graphics.FromImage(tinyBmp))
                 {
-                    tinyG.SmoothingMode = SmoothingMode.HighSpeed;
-                    tinyG.InterpolationMode = InterpolationMode.Low;
+                    tinyG.SmoothingMode = SmoothingMode.AntiAlias;
+                    tinyG.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    tinyG.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     tinyG.Clear(Color.Black);
 
-                    float scaleX = (float)tinyW / blurRect.Width;
-                    float scaleY = (float)tinyH / blurRect.Height;
-                    tinyG.ScaleTransform(scaleX, scaleY);
-                    tinyG.TranslateTransform(-blurRect.X, -blurRect.Y);
+                    using (Matrix transform = new Matrix())
+                    {
+                        transform.Scale((float)tinyW / blurRectF.Width, (float)tinyH / blurRectF.Height);
+                        transform.Translate(-blurRectF.X, -blurRectF.Y);
+                        tinyG.Transform = transform;
+                    }
 
                     foreach (var item in underlyingImages)
                     {
@@ -182,14 +239,17 @@ namespace VideoEditor.Services
 
                     GraphicsState state = g.Save();
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.SmoothingMode = SmoothingMode.HighQuality;
                     g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-
-                    Rectangle targetRect = new Rectangle(blurRect.X, blurRect.Y, blurRect.Width + 1, blurRect.Height + 1);
 
                     g.DrawImage(
                         tinyBmp,
-                        targetRect,
-                        0, 0, tinyBmp.Width, tinyBmp.Height,
+                        new PointF[] {
+                            new PointF(blurRectF.Left, blurRectF.Top),
+                            new PointF(blurRectF.Right, blurRectF.Top),
+                            new PointF(blurRectF.Left, blurRectF.Bottom)
+                        },
+                        new RectangleF(0, 0, tinyBmp.Width, tinyBmp.Height),
                         GraphicsUnit.Pixel,
                         attr
                     );
@@ -199,145 +259,10 @@ namespace VideoEditor.Services
             }
         }
 
-        private static void ApplyMultiPassBlur(Bitmap bmp, int radius, int passes)
-        {
-            Rectangle rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
-            BitmapData bmpData = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
-
-            IntPtr ptr = bmpData.Scan0;
-            int bytes = Math.Abs(bmpData.Stride) * bmp.Height;
-            byte[] src = new byte[bytes];
-            byte[] dst = new byte[bytes];
-
-            System.Runtime.InteropServices.Marshal.Copy(ptr, src, 0, bytes);
-
-            int w = bmp.Width;
-            int h = bmp.Height;
-            int stride = bmpData.Stride;
-
-            for (int p = 0; p < passes; p++)
-            {
-                // Horizontal Pass
-                for (int y = 0; y < h; y++)
-                {
-                    int rowOffset = y * stride;
-                    for (int x = 0; x < w; x++)
-                    {
-                        int rSum = 0, gSum = 0, bSum = 0, aSum = 0, count = 0;
-
-                        for (int k = -radius; k <= radius; k++)
-                        {
-                            int px = Math.Clamp(x + k, 0, w - 1);
-                            int idx = rowOffset + (px * 4);
-
-                            bSum += src[idx];
-                            gSum += src[idx + 1];
-                            rSum += src[idx + 2];
-                            aSum += src[idx + 3];
-                            count++;
-                        }
-
-                        int outIdx = rowOffset + (x * 4);
-                        dst[outIdx] = (byte)(bSum / count);
-                        dst[outIdx + 1] = (byte)(gSum / count);
-                        dst[outIdx + 2] = (byte)(rSum / count);
-                        dst[outIdx + 3] = (byte)(aSum / count);
-                    }
-                }
-
-                // Vertical Pass
-                for (int y = 0; y < h; y++)
-                {
-                    int rowOffset = y * stride;
-                    for (int x = 0; x < w; x++)
-                    {
-                        int rSum = 0, gSum = 0, bSum = 0, aSum = 0, count = 0;
-
-                        for (int k = -radius; k <= radius; k++)
-                        {
-                            int py = Math.Clamp(y + k, 0, h - 1);
-                            int idx = (py * stride) + (x * 4);
-
-                            bSum += dst[idx];
-                            gSum += dst[idx + 1];
-                            rSum += dst[idx + 2];
-                            aSum += dst[idx + 3];
-                            count++;
-                        }
-
-                        int outIdx = rowOffset + (x * 4);
-                        src[outIdx] = (byte)(bSum / count);
-                        src[outIdx + 1] = (byte)(gSum / count);
-                        src[outIdx + 2] = (byte)(rSum / count);
-                        src[outIdx + 3] = (byte)(aSum / count);
-                    }
-                }
-            }
-
-            System.Runtime.InteropServices.Marshal.Copy(src, 0, ptr, bytes);
-            bmp.UnlockBits(bmpData);
-        }
-        public static Bitmap RenderExportFrame(List<MediaItem> allItems, double currentTime, int canvasWidth = 1080, int canvasHeight = 1920)
-        {
-            Bitmap frame = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(frame))
-            {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.Clear(Color.Black);
-
-                // 1. Get all active visual items (Images AND Blurs) sorted by TrackIndex (back-to-front)
-                var activeVisualItems = allItems
-                    .Where(i => (i.Type == MediaType.Image || (i.Type == MediaType.Blur && i.BlurData != null)) &&
-                                currentTime >= i.StartTime &&
-                                currentTime < i.StartTime + i.Duration)
-                    .OrderByDescending(i => i.TrackIndex); // Higher TrackIndex = Background, Lower TrackIndex = Foreground
-
-                // 2. Render images and blurs in exact layer order
-                foreach (var item in activeVisualItems)
-                {
-                    if (item.Type == MediaType.Image)
-                    {
-                        if (File.Exists(item.FilePath))
-                        {
-                            using var img = GetCachedImage(item.FilePath);
-                            DrawImageItem(g, img, item, currentTime, 0, 0, canvasWidth, canvasHeight);
-                        }
-
-                        if (item.TextLabels != null)
-                        {
-                            double localTime = currentTime - item.StartTime;
-                            foreach (var lbl in item.TextLabels.Where(l => localTime >= l.StartTime && localTime <= l.StartTime + l.Duration))
-                                DrawTextLabel(g, lbl, 0, 0, canvasWidth, canvasHeight);
-                        }
-                    }
-                    else if (item.Type == MediaType.Blur)
-                    {
-                        // Draws blur on top of background images, but BEFORE foreground images!
-                        DrawBlurOverlay(g, item.BlurData, allItems, currentTime, 0, 0, canvasWidth, canvasHeight, item.TrackIndex);
-                    }
-                }
-
-                // 3. Render Text Overlays on top of everything
-                var activeTextItems = allItems
-                    .Where(i => i.Type == MediaType.Text &&
-                                i.TextData != null &&
-                                currentTime >= i.StartTime &&
-                                currentTime < i.StartTime + i.Duration);
-
-                foreach (var textItem in activeTextItems)
-                {
-                    DrawTextLabel(g, textItem.TextData, 0, 0, canvasWidth, canvasHeight);
-                }
-            }
-            return frame;
-        }
-
         public static void DrawTextLabel(Graphics g, TextLabel label, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
         {
             if (label == null || string.IsNullOrEmpty(label.Content)) return;
 
-            // Calculate relative bounding rect based on canvas dimensions
             RectangleF rect = new RectangleF(
                 canvasX + (label.RelativeX * canvasWidth),
                 canvasY + (label.RelativeY * canvasHeight),
@@ -345,13 +270,11 @@ namespace VideoEditor.Services
                 Math.Max(label.RelativeHeight * canvasHeight, 30)
             );
 
-            // 1. Fill background
             using (var bgBrush = new SolidBrush(label.BackgroundColor))
             {
                 g.FillRectangle(bgBrush, rect);
             }
 
-            // 2. Scale font size dynamically relative to 1080x1920 base canvas
             float baseFontSize = label.FontSize > 0 ? label.FontSize : 15f;
             float scaleFactor = (float)canvasHeight / 1920f;
             float scaledFontSize = Math.Max(baseFontSize * scaleFactor, 8f);
