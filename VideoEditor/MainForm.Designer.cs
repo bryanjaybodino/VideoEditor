@@ -101,6 +101,7 @@ namespace VideoEditor
             cbOutEffect = new ComboBox();
             numOutDuration = new NumericUpDown();
             timelineControl = new TimelineControl();
+            btnClearAll = new Button();
             mainLayout.SuspendLayout();
             toolbar.SuspendLayout();
             leftPanel.SuspendLayout();
@@ -145,6 +146,7 @@ namespace VideoEditor
             toolbar.Controls.Add(btnPlayPause);
             toolbar.Controls.Add(btnAutoCaption);
             toolbar.Controls.Add(btnExport);
+            toolbar.Controls.Add(btnClearAll);
             toolbar.Dock = DockStyle.Fill;
             toolbar.Location = new Point(3, 3);
             toolbar.Name = "toolbar";
@@ -645,6 +647,21 @@ namespace VideoEditor
             timelineControl.TabIndex = 4;
             timelineControl.UndoRedoManager = null;
             // 
+            // btnClearAll
+            // 
+            btnClearAll.BackColor = Color.Crimson;
+            btnClearAll.FlatAppearance.BorderSize = 0;
+            btnClearAll.FlatStyle = FlatStyle.Flat;
+            btnClearAll.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            btnClearAll.ForeColor = Color.White;
+            btnClearAll.Location = new Point(602, 10);
+            btnClearAll.Margin = new Padding(0, 0, 8, 0);
+            btnClearAll.Name = "btnClearAll";
+            btnClearAll.Size = new Size(140, 32);
+            btnClearAll.TabIndex = 5;
+            btnClearAll.Text = "Clear All";
+            btnClearAll.UseVisualStyleBackColor = false;
+            // 
             // MainForm
             // 
             AutoScaleDimensions = new SizeF(8F, 20F);
@@ -753,5 +770,6 @@ namespace VideoEditor
         private ComboBox cbOutEffect;
         private NumericUpDown numOutDuration;
         private TimelineControl timelineControl;
+        private Button btnClearAll;
     }
 }

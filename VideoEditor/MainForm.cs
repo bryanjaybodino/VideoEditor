@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Windows.Media;
@@ -93,6 +94,9 @@ namespace VideoEditor
 
             // Register the message filter when the form loads
             Application.AddMessageFilter(this);
+
+
+            LoadProjectState();
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -144,6 +148,12 @@ namespace VideoEditor
         {
             base.OnHandleCreated(e);
             ApplyDarkModeTheme(this);
+        }
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // Auto-save work state before exit
+            SaveProjectState();
+            base.OnFormClosing(e);
         }
 
         private void ApplyDarkModeTheme(Control parent)
@@ -319,6 +329,40 @@ namespace VideoEditor
                 isUserScrubbing = false;
                 scrubAudioTimer.Stop();
                 ApplyAudioSeek(timelineControl.CurrentTime);
+            };
+
+            // Example assuming you added a button named btnClearAll in Designer
+            btnClearAll.Click += (s, e) =>
+            {
+                var confirm = MessageBox.Show(
+                    "Are you sure you want to clear the current project? This will remove all media clips.",
+                    "Clear Project",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning
+                );
+
+                if (confirm == DialogResult.Yes)
+                {
+                    PausePlayback();
+
+                    // Clear active items
+                    mediaItems.Clear();
+                    undoRedoManager = new UndoRedoManager(); // Reset undo history
+                    timelineControl.UndoRedoManager = undoRedoManager;
+                    previewControl.UndoRedoManager = undoRedoManager;
+
+                    timelineControl.CurrentTime = 0;
+                    timelineControl.SelectItem(null);
+
+                    // Delete auto-save file from disk
+                    if (File.Exists(AutoSaveFilePath))
+                    {
+                        try { File.Delete(AutoSaveFilePath); } catch { }
+                    }
+
+                    SyncListBox();
+                    RefreshTimeline();
+                }
             };
         }
 
@@ -1053,6 +1097,57 @@ namespace VideoEditor
             catch { }
 
             return 120.0;
+        }
+
+
+
+
+        // Add path constant near top of class
+        private string AutoSaveFilePath => Path.Combine(Application.UserAppDataPath, "project_autosave.json");
+
+        private void SaveProjectState()
+        {
+            try
+            {
+                var saveData = new ProjectSaveData
+                {
+                    MediaItems = this.mediaItems,
+                    CurrentTime = timelineControl.CurrentTime
+                };
+
+                string json = JsonSerializer.Serialize(saveData, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(AutoSaveFilePath, json);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to auto-save project: {ex.Message}");
+            }
+        }
+
+        private void LoadProjectState()
+        {
+            try
+            {
+                if (File.Exists(AutoSaveFilePath))
+                {
+                    string json = File.ReadAllText(AutoSaveFilePath);
+                    var saveData = JsonSerializer.Deserialize<ProjectSaveData>(json);
+
+                    if (saveData != null && saveData.MediaItems != null)
+                    {
+                        this.mediaItems = saveData.MediaItems;
+                        timelineControl.SetMediaItems(this.mediaItems);
+                        timelineControl.CurrentTime = saveData.CurrentTime;
+
+                        SyncListBox();
+                        RefreshTimeline();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to restore auto-save state: {ex.Message}");
+            }
         }
     }
 }

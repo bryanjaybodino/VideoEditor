@@ -3,6 +3,11 @@ using System.Drawing;
 
 namespace VideoEditor.Models
 {
+    public class ProjectSaveData
+    {
+        public List<MediaItem> MediaItems { get; set; } = new List<MediaItem>();
+        public double CurrentTime { get; set; } = 0;
+    }
     public enum MediaType
     {
         Image,
