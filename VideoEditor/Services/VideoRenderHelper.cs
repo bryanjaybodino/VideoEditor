@@ -115,15 +115,18 @@ namespace VideoEditor.Services
             float scaleX = (float)canvasWidth / img.Width;
             float scaleY = (float)canvasHeight / img.Height;
             float finalScale = Math.Max(scaleX, scaleY) * item.Scale * scale;
-            int w = (int)(img.Width * finalScale);
-            int h = (int)(img.Height * finalScale);
 
+            // Keep width and height as floating-point precision
+            float w = img.Width * finalScale;
+            float h = img.Height * finalScale;
+
+            // High-precision floating point placement
             float posX = (item.PositionX * (canvasWidth / 1080f)) + offsetX + (waveAmount * (float)Math.Sin(localTime * 10));
             float posY = (item.PositionY * (canvasHeight / 1920f)) + offsetY;
-            int x = canvasX + (canvasWidth - w) / 2 + (int)posX;
-            int y = canvasY + (canvasHeight - h) / 2 + (int)posY;
+            float x = canvasX + (canvasWidth - w) / 2f + posX;
+            float y = canvasY + (canvasHeight - h) / 2f + posY;
 
-            Rectangle destRect = new Rectangle(x, y, w, h);
+            RectangleF destRect = new RectangleF(x, y, w, h);
 
             if (blurAmount > 0.05f)
             {
@@ -132,15 +135,22 @@ namespace VideoEditor.Services
                 for (int i = steps; i >= 1; i--)
                 {
                     float factor = (i / (float)steps) * blurAmount;
-                    int bw = (int)(w * (1f + factor * 0.15f)), bh = (int)(h * (1f + factor * 0.15f));
-                    int bx = x - (bw - w) / 2 + (int)(blurAngleX * factor * 20);
-                    int by = y - (bh - h) / 2 + (int)(blurAngleY * factor * 20);
+                    float bw = w * (1f + factor * 0.15f);
+                    float bh = h * (1f + factor * 0.15f);
+                    float bx = x - (bw - w) / 2f + (blurAngleX * factor * 20f);
+                    float by = y - (bh - h) / 2f + (blurAngleY * factor * 20f);
 
-                    DrawWithAlpha(g, img, new Rectangle(bx, by, bw, bh), stepAlpha);
+                    DrawWithAlpha(g, img, new RectangleF(bx, by, bw, bh), stepAlpha);
                 }
             }
 
             DrawWithAlpha(g, img, destRect, opacity);
+        }
+        private static void DrawWithAlpha(Graphics g, Image img, RectangleF bounds, float alpha)
+        {
+            using var attr = new ImageAttributes();
+            attr.SetColorMatrix(new ColorMatrix { Matrix33 = Math.Clamp(alpha, 0f, 1f) }, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+            g.DrawImage(img, Rectangle.Round(bounds), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attr);
         }
 
         private static void ApplyEffect(string type, float progress, bool isIn, ref float opacity, ref float scale, ref float offsetX, ref float offsetY, ref float blur, ref float blurX, ref float blurY, ref float wave, int cw, int ch)
@@ -171,17 +181,11 @@ namespace VideoEditor.Services
             }
         }
 
-        private static void DrawWithAlpha(Graphics g, Image img, Rectangle bounds, float alpha)
-        {
-            using var attr = new ImageAttributes();
-            attr.SetColorMatrix(new ColorMatrix { Matrix33 = Math.Clamp(alpha, 0f, 1f) }, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
-            g.DrawImage(img, bounds, 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attr);
-        }
-
         public static void DrawBlurOverlay(Graphics g, BlurOverlay blur, List<MediaItem> allItems, double currentTime, int canvasX, int canvasY, int canvasWidth, int canvasHeight, int blurTrackIndex)
         {
             if (blur == null) return;
 
+            // Calculate exact blur box bounds on canvas
             float bx = canvasX + ((float)blur.RelativeX * canvasWidth);
             float by = canvasY + ((float)blur.RelativeY * canvasHeight);
             float bw = (float)blur.RelativeWidth * canvasWidth;
@@ -191,8 +195,9 @@ namespace VideoEditor.Services
             RectangleF canvasRectF = new RectangleF(canvasX, canvasY, canvasWidth, canvasHeight);
             blurRectF.Intersect(canvasRectF);
 
-            if (blurRectF.Width <= 0 || blurRectF.Height <= 0) return;
+            if (blurRectF.Width <= 1 || blurRectF.Height <= 1) return;
 
+            // Fetch images underneath this blur track (higher TrackIndex = visually behind)
             var underlyingImages = allItems
                 .Where(i => i.Type == MediaType.Image &&
                             i.TrackIndex > blurTrackIndex &&
@@ -203,58 +208,70 @@ namespace VideoEditor.Services
 
             if (!underlyingImages.Any()) return;
 
-            float scaleFactor = 0.0625f;
-            int tinyW = Math.Max(8, (int)Math.Round(blurRectF.Width * scaleFactor));
-            int tinyH = Math.Max(8, (int)Math.Round(blurRectF.Height * scaleFactor));
+            // STEP 1: Render the full scene portion underneath at full size into an intermediate buffer
+            int cropX = (int)Math.Floor(blurRectF.X);
+            int cropY = (int)Math.Floor(blurRectF.Y);
+            int cropW = (int)Math.Ceiling(blurRectF.Width);
+            int cropH = (int)Math.Ceiling(blurRectF.Height);
 
-            using (Bitmap tinyBmp = new Bitmap(tinyW, tinyH, PixelFormat.Format32bppArgb))
+            if (cropW <= 0 || cropH <= 0) return;
+
+            using (Bitmap fullRegionBmp = new Bitmap(cropW, cropH, PixelFormat.Format32bppArgb))
             {
-                using (Graphics tinyG = Graphics.FromImage(tinyBmp))
+                using (Graphics fullG = Graphics.FromImage(fullRegionBmp))
                 {
-                    tinyG.SmoothingMode = SmoothingMode.AntiAlias;
-                    tinyG.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    tinyG.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                    tinyG.Clear(Color.Black);
+                    fullG.SmoothingMode = SmoothingMode.AntiAlias;
+                    fullG.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    fullG.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    fullG.Clear(Color.Black);
 
-                    using (Matrix transform = new Matrix())
-                    {
-                        transform.Scale((float)tinyW / blurRectF.Width, (float)tinyH / blurRectF.Height);
-                        transform.Translate(-blurRectF.X, -blurRectF.Y);
-                        tinyG.Transform = transform;
-                    }
+                    // Shift origin so (0,0) of fullRegionBmp corresponds to cropX, cropY
+                    fullG.TranslateTransform(-cropX, -cropY);
 
                     foreach (var item in underlyingImages)
                     {
                         var img = GetCachedImage(item.FilePath);
                         if (img != null)
                         {
-                            DrawImageItem(tinyG, img, item, currentTime, canvasX, canvasY, canvasWidth, canvasHeight);
+                            DrawImageItem(fullG, img, item, currentTime, canvasX, canvasY, canvasWidth, canvasHeight);
                         }
                     }
                 }
 
-                using (var attr = new ImageAttributes())
+                // STEP 2: Smooth downscale to create the blur effect without matrix transform shifts
+                int scaleDownFactor = 16;
+                int tinyW = Math.Max(4, cropW / scaleDownFactor);
+                int tinyH = Math.Max(4, cropH / scaleDownFactor);
+
+                using (Bitmap tinyBmp = new Bitmap(tinyW, tinyH, PixelFormat.Format32bppArgb))
                 {
-                    attr.SetWrapMode(WrapMode.TileFlipXY);
+                    using (Graphics tinyG = Graphics.FromImage(tinyBmp))
+                    {
+                        tinyG.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                        tinyG.PixelOffsetMode = PixelOffsetMode.Half;
+                        tinyG.DrawImage(fullRegionBmp, 0, 0, tinyW, tinyH);
+                    }
 
-                    GraphicsState state = g.Save();
-                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    g.SmoothingMode = SmoothingMode.HighQuality;
-                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    // STEP 3: Stretch the low-res blurred snapshot back over the target blur bounds on main canvas
+                    using (var attr = new ImageAttributes())
+                    {
+                        attr.SetWrapMode(WrapMode.TileFlipXY);
 
-                    g.DrawImage(
-                        tinyBmp,
-                        new PointF[] {
-                            new PointF(blurRectF.Left, blurRectF.Top),
-                            new PointF(blurRectF.Right, blurRectF.Top),
-                            new PointF(blurRectF.Left, blurRectF.Bottom)
-                        },
-                        new RectangleF(0, 0, tinyBmp.Width, tinyBmp.Height),
-                        GraphicsUnit.Pixel,
-                        attr
-                    );
+                        GraphicsState state = g.Save();
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.SmoothingMode = SmoothingMode.HighQuality;
+                        g.PixelOffsetMode = PixelOffsetMode.Half;
 
-                    g.Restore(state);
+                        g.DrawImage(
+                            tinyBmp,
+                            new Rectangle((int)blurRectF.X, (int)blurRectF.Y, (int)blurRectF.Width, (int)blurRectF.Height),
+                            0, 0, tinyBmp.Width, tinyBmp.Height,
+                            GraphicsUnit.Pixel,
+                            attr
+                        );
+
+                        g.Restore(state);
+                    }
                 }
             }
         }
