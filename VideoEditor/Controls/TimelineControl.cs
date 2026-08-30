@@ -883,9 +883,85 @@ namespace VideoEditor.Controls
             }
             else if (isDraggingClip && activeClip != null)
             {
-                this.Cursor = Cursors.Default;
-                double newStart = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - clipDragOffset;
-                double deltaStart = Math.Max(0, newStart) - activeClip.StartTime;
+                this.Cursor = Cursors.Hand;
+
+                // Calculate raw intended start time based on mouse position
+                double rawNewStart = ((e.X - leftPanelWidth + scrollX) / pixelsPerSecond) - clipDragOffset;
+                double candidateStart = Math.Max(0, rawNewStart);
+                double clipDuration = activeClip.Duration;
+                double candidateEnd = candidateStart + clipDuration;
+
+                // Gather all potential snap boundaries from other clips on nearby tracks
+                var snapCandidates = mediaItems
+                    .Where(item => !selectedItems.Contains(item) && // Don't snap to other currently selected items being dragged
+                                   Math.Abs(item.TrackIndex - activeClip.TrackIndex) <= 1)
+                    .SelectMany(item => new[] { item.StartTime, item.StartTime + item.Duration });
+
+                double? closestSnapTime = null;
+                double minDistance = double.MaxValue;
+                bool snapToStart = true; // Determines whether we are aligning the clip's start or end edge
+
+                // Check distances for both the leading edge (Start) and trailing edge (End)
+                foreach (double targetTime in snapCandidates)
+                {
+                    // Check start edge snapping
+                    double distanceStart = Math.Abs((candidateStart - targetTime) * pixelsPerSecond);
+                    if (distanceStart < minDistance)
+                    {
+                        minDistance = distanceStart;
+                        closestSnapTime = targetTime;
+                        snapToStart = true;
+                    }
+
+                    // Check end edge snapping
+                    double distanceEnd = Math.Abs((candidateEnd - targetTime) * pixelsPerSecond);
+                    if (distanceEnd < minDistance)
+                    {
+                        minDistance = distanceEnd;
+                        closestSnapTime = targetTime;
+                        snapToStart = false;
+                    }
+                }
+
+                // Apply snap behavior using your existing threshold configuration
+                if (closestSnapTime.HasValue)
+                {
+                    double targetTime = closestSnapTime.Value;
+                    double activeEdgePixels = snapToStart ? (candidateStart - targetTime) * pixelsPerSecond : (candidateEnd - targetTime) * pixelsPerSecond;
+
+                    if (!isSnappedToBoundary)
+                    {
+                        if (Math.Abs(activeEdgePixels) <= SnapThresholdPixels)
+                        {
+                            isSnappedToBoundary = true;
+                            targetSnapTime = targetTime;
+
+                            if (snapToStart) candidateStart = targetSnapTime;
+                            else candidateStart = targetSnapTime - clipDuration;
+                        }
+                    }
+                    else
+                    {
+                        // Check breakout threshold to release the snap
+                        double currentActiveEdge = snapToStart ? candidateStart : candidateEnd;
+                        if (Math.Abs((currentActiveEdge - targetSnapTime) * pixelsPerSecond) > BreakoutThresholdPixels)
+                        {
+                            isSnappedToBoundary = false;
+                        }
+                        else
+                        {
+                            if (snapToStart) candidateStart = targetSnapTime;
+                            else candidateStart = targetSnapTime - clipDuration;
+                        }
+                    }
+                }
+                else
+                {
+                    isSnappedToBoundary = false;
+                }
+
+                // Compute final delta offset to apply consistently across multi-selections
+                double deltaStart = candidateStart - activeClip.StartTime;
 
                 int trackDelta = 0;
                 if (activeClip.Type == MediaType.Image || activeClip.Type == MediaType.Text || activeClip.Type == MediaType.Blur)
