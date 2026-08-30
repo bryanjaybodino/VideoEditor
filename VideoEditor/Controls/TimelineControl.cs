@@ -66,7 +66,7 @@ namespace VideoEditor.Controls
         public event Action<MediaItem> ClipSelected;
         public event Action<IEnumerable<MediaItem>> SelectionChanged;
         public event Action<MediaItem> ItemResized;
-
+        private List<MediaItem> copiedItems = new List<MediaItem>();
         public MediaItem SelectedItem => selectedItems.FirstOrDefault();
         public IReadOnlySet<MediaItem> SelectedItems => selectedItems;
         private Dictionary<MediaItem, (double StartTime, int TrackIndex)> initialItemStates = new Dictionary<MediaItem, (double StartTime, int TrackIndex)>();
@@ -238,6 +238,16 @@ namespace VideoEditor.Controls
             if (e.KeyCode == Keys.Delete)
             {
                 DeleteSelectedItems();
+            }
+            else if (e.Control && e.KeyCode == Keys.C)
+            {
+                CopySelectedItems();
+                e.Handled = true;
+            }
+            else if (e.Control && e.KeyCode == Keys.V)
+            {
+                PasteItems();
+                e.Handled = true;
             }
         }
 
@@ -1209,6 +1219,76 @@ namespace VideoEditor.Controls
         {
             if (mediaItems.Count == 0) return 60.0;
             return mediaItems.Max(x => x.StartTime + x.Duration);
+        }
+        private void CopySelectedItems()
+        {
+            copiedItems.Clear();
+            if (selectedItems.Count == 0) return;
+
+            foreach (var item in selectedItems)
+            {
+                // Deep copy properties so modifications to pasted items don't affect originals
+                var clone = new MediaItem
+                {
+                    Type = item.Type,
+                    FilePath = item.FilePath,
+                    StartTime = item.StartTime,
+                    Duration = item.Duration,
+                    OriginalDuration = item.OriginalDuration,
+                    SourceOffset = item.SourceOffset,
+                    TrackIndex = item.TrackIndex,
+                    AudioPeaks = item.AudioPeaks,
+                    TextData = item.TextData != null ? new TextLabel { Content = item.TextData.Content } : null
+                };
+                copiedItems.Add(clone);
+            }
+        }
+
+        private void PasteItems()
+        {
+            if (copiedItems.Count == 0) return;
+
+            // Find baseline metrics of the copied cluster to preserve relative positioning
+            double minStartTime = copiedItems.Min(x => x.StartTime);
+            int minTrackIndex = copiedItems.Min(x => x.TrackIndex);
+
+            // Calculate offsets based on current playhead time and selected track row
+            double timeOffset = currentTime - minStartTime;
+            int trackOffset = SelectedTrackIndex - minTrackIndex;
+
+            selectedItems.Clear();
+
+            foreach (var original in copiedItems)
+            {
+                double newStart = Math.Max(0, original.StartTime + timeOffset);
+                int targetTrack = original.Type == MediaType.Audio ? 0 : Math.Max(0, original.TrackIndex + trackOffset);
+
+                // Skip pasting onto locked tracks
+                if (lockedTracks.Contains(targetTrack) && original.Type != MediaType.Audio)
+                {
+                    targetTrack = original.TrackIndex;
+                }
+
+                var newItem = new MediaItem
+                {
+                    Type = original.Type,
+                    FilePath = original.FilePath,
+                    StartTime = newStart,
+                    Duration = original.Duration,
+                    OriginalDuration = original.OriginalDuration,
+                    SourceOffset = original.SourceOffset,
+                    TrackIndex = targetTrack,
+                    AudioPeaks = original.AudioPeaks,
+                    TextData = original.TextData != null ? new TextLabel { Content = original.TextData.Content } : null
+                };
+
+                mediaItems.Add(newItem);
+                selectedItems.Add(newItem);
+            }
+
+            UpdateScrollBars();
+            NotifySelectionChanged();
+            this.Invalidate();
         }
     }
 }
