@@ -430,7 +430,18 @@ namespace VideoEditor.Controls
 
                 if (item.Type == MediaType.Text && item.TextData != null)
                 {
-                    g.DrawString(item.TextData.Content, this.Font, Brushes.White, rect.X + 5, rect.Y + 12);
+                    // Define a padded internal rectangle inside the text clip block
+                    Rectangle textRect = new Rectangle(rect.X + 4, rect.Y + 2, rect.Width - 8, rect.Height - 4);
+
+                    using (var format = new StringFormat
+                    {
+                        Trimming = StringTrimming.EllipsisCharacter, // Truncate overflow text with "..."
+                        FormatFlags = StringFormatFlags.NoClip        // Keep inside bounds or clip properly
+                    })
+                    {
+                        // Drawing using textRect ensures text is clipped inside the track height
+                        g.DrawString(item.TextData.Content, this.Font, Brushes.White, textRect, format);
+                    }
                 }
 
                 if (item.Type == MediaType.Blur)

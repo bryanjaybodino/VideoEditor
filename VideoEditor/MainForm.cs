@@ -121,6 +121,14 @@ namespace VideoEditor
             {
                 undoRedoManager.Undo();
                 SyncListBox();
+
+                // Re-bind controls for the selected text label if applicable
+                if (previewControl.SelectedTextLabel != null)
+                {
+                    BindTextLabelToUI(previewControl.SelectedTextLabel);
+                    previewControl.RefreshSelectedTextProperties();
+                }
+
                 RefreshTimeline();
             }
         }
@@ -131,6 +139,14 @@ namespace VideoEditor
             {
                 undoRedoManager.Redo();
                 SyncListBox();
+
+                // Re-bind controls for the selected text label if applicable
+                if (previewControl.SelectedTextLabel != null)
+                {
+                    BindTextLabelToUI(previewControl.SelectedTextLabel);
+                    previewControl.RefreshSelectedTextProperties();
+                }
+
                 RefreshTimeline();
             }
         }
@@ -251,30 +267,66 @@ namespace VideoEditor
                 RefreshTimeline();
             };
 
+            // 1. Font Size Change
             numFontSize.ValueChanged += (s, e) =>
             {
                 if (!isBindingUI && previewControl.SelectedTextLabel != null)
                 {
-                    previewControl.SelectedTextLabel.FontSize = (float)numFontSize.Value;
-                    previewControl.Invalidate();
+                    var label = previewControl.SelectedTextLabel;
+                    float oldSize = label.FontSize;
+                    float newSize = (float)numFontSize.Value;
+
+                    if (Math.Abs(oldSize - newSize) > 0.01f)
+                    {
+                        var cmd = new ChangeTextPropertyCommand(
+                            label,
+                            l => { l.FontSize = newSize; previewControl.RefreshSelectedTextProperties(); },
+                            l => { l.FontSize = oldSize; previewControl.RefreshSelectedTextProperties(); }
+                        );
+                        undoRedoManager.ExecuteCommand(cmd);
+                    }
                 }
             };
 
+            // 2. Text Color Change
             btnTextColor.Click += (s, e) => PickColor(Color.White, c =>
             {
                 if (previewControl.SelectedTextLabel != null)
                 {
-                    previewControl.SelectedTextLabel.TextColor = c;
-                    previewControl.Invalidate();
+                    var label = previewControl.SelectedTextLabel;
+                    Color oldColor = label.TextColor;
+                    Color newColor = c;
+
+                    if (oldColor != newColor)
+                    {
+                        var cmd = new ChangeTextPropertyCommand(
+                            label,
+                            l => { l.TextColor = newColor; previewControl.RefreshSelectedTextProperties(); },
+                            l => { l.TextColor = oldColor; previewControl.RefreshSelectedTextProperties(); }
+                        );
+                        undoRedoManager.ExecuteCommand(cmd);
+                    }
                 }
             });
 
+            // 3. Background Color Change
             btnBgColor.Click += (s, e) => PickColor(Color.FromArgb(128, 0, 0, 0), c =>
             {
                 if (previewControl.SelectedTextLabel != null)
                 {
-                    previewControl.SelectedTextLabel.BackgroundColor = c;
-                    previewControl.Invalidate();
+                    var label = previewControl.SelectedTextLabel;
+                    Color oldBg = label.BackgroundColor;
+                    Color newBg = c;
+
+                    if (oldBg != newBg)
+                    {
+                        var cmd = new ChangeTextPropertyCommand(
+                            label,
+                            l => { l.BackgroundColor = newBg; previewControl.RefreshSelectedTextProperties(); },
+                            l => { l.BackgroundColor = oldBg; previewControl.RefreshSelectedTextProperties(); }
+                        );
+                        undoRedoManager.ExecuteCommand(cmd);
+                    }
                 }
             });
 
