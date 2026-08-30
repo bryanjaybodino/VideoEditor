@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using VideoEditor.Commands;
 using VideoEditor.Models;
@@ -20,6 +21,10 @@ namespace VideoEditor.Controls
 
         private MediaItem selectedPreviewItem = null;
         private TextLabel selectedTextLabel = null;
+        private bool isEditingText = false;
+
+        private TransparentTextBox inlineEditor;
+
         private bool isDraggingImage = false;
         private bool isDraggingText = false;
         private bool isResizingText = false;
@@ -45,12 +50,18 @@ namespace VideoEditor.Controls
         public int LastCanvasHeight { get; private set; } = 1920;
 
         public MediaItem SelectedItem { get; set; }
+
         public TextLabel SelectedTextLabel
         {
             get => selectedTextLabel;
             set
             {
                 selectedTextLabel = value;
+
+                // Reset text editing state on selection change/clear
+                isEditingText = false;
+                inlineEditor.Visible = false;
+
                 TextLabelSelected?.Invoke(selectedTextLabel);
                 this.Invalidate();
             }
@@ -65,6 +76,16 @@ namespace VideoEditor.Controls
             this.BackColor = Color.FromArgb(15, 15, 15);
             this.TabStop = true;
 
+            // Transparent overlay TextBox for clean text editing
+            inlineEditor = new TransparentTextBox
+            {
+                Visible = false,
+                ScrollBars = ScrollBars.None
+            };
+            inlineEditor.TextChanged += InlineEditor_TextChanged;
+            inlineEditor.LostFocus += InlineEditor_LostFocus;
+            this.Controls.Add(inlineEditor);
+
             this.MouseDown += PreviewControl_MouseDown;
             this.MouseMove += PreviewControl_MouseMove;
             this.MouseUp += PreviewControl_MouseUp;
@@ -72,41 +93,147 @@ namespace VideoEditor.Controls
             this.KeyUp += PreviewControl_KeyUp;
         }
 
+        /// <summary>
+        /// Call this method from your property panel/inspectors when TextColor, BackgroundColor, Font, or FontSize changes on SelectedTextLabel.
+        /// </summary>
+        public void RefreshSelectedTextProperties()
+        {
+            if (selectedTextLabel != null && isEditingText && inlineEditor.Visible)
+            {
+                float scaledFontSize = Math.Max(6f, selectedTextLabel.FontSize * ((float)LastCanvasHeight / 1920f));
+                inlineEditor.Font = new Font(selectedTextLabel.FontFamily, scaledFontSize, selectedTextLabel.IsBold ? FontStyle.Bold : FontStyle.Regular);
+                inlineEditor.ForeColor = selectedTextLabel.TextColor;
+
+                if (selectedTextLabel.BackgroundColor != Color.Transparent && selectedTextLabel.BackgroundColor.A > 0)
+                {
+                    inlineEditor.BackColor = selectedTextLabel.BackgroundColor;
+                }
+                else
+                {
+                    inlineEditor.BackColor = Color.Transparent;
+                }
+
+                inlineEditor.UpdateVerticalAlignment();
+            }
+            this.Invalidate();
+        }
+
+        private void UpdateInlineEditorPosition()
+        {
+            if (selectedTextLabel == null || !isEditingText || LastCanvasWidth <= 0 || LastCanvasHeight <= 0)
+            {
+                inlineEditor.Visible = false;
+                return;
+            }
+
+            int canvasX = (this.Width - LastCanvasWidth) / 2;
+            int canvasY = (this.Height - LastCanvasHeight) / 2;
+
+            float lX = canvasX + (selectedTextLabel.RelativeX * LastCanvasWidth);
+            float lY = canvasY + (selectedTextLabel.RelativeY * LastCanvasHeight);
+            float lW = Math.Max(selectedTextLabel.RelativeWidth * LastCanvasWidth, 50f);
+            float lH = Math.Max(selectedTextLabel.RelativeHeight * LastCanvasHeight, 30f);
+
+            float scaledFontSize = Math.Max(6f, selectedTextLabel.FontSize * ((float)LastCanvasHeight / 1920f));
+
+            inlineEditor.Bounds = new Rectangle((int)lX, (int)lY, (int)lW, (int)lH);
+            inlineEditor.Font = new Font(selectedTextLabel.FontFamily, scaledFontSize, selectedTextLabel.IsBold ? FontStyle.Bold : FontStyle.Regular);
+            inlineEditor.ForeColor = selectedTextLabel.TextColor;
+
+            if (selectedTextLabel.BackgroundColor != Color.Transparent && selectedTextLabel.BackgroundColor.A > 0)
+            {
+                inlineEditor.BackColor = selectedTextLabel.BackgroundColor;
+            }
+            else
+            {
+                inlineEditor.BackColor = Color.Transparent;
+            }
+
+            inlineEditor.TextAlign = HorizontalAlignment.Center;
+
+            string normalizedText = (selectedTextLabel.Content ?? string.Empty).Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
+            if (inlineEditor.Text != normalizedText)
+            {
+                inlineEditor.Text = normalizedText;
+            }
+
+            inlineEditor.Visible = true;
+            inlineEditor.BringToFront();
+            inlineEditor.Focus();
+
+            // Recalculate vertical alignment after bounds and text are set
+            inlineEditor.UpdateVerticalAlignment();
+        }
+
+        private void InlineEditor_LostFocus(object sender, EventArgs e)
+        {
+            this.Invalidate();
+        }
+
+        private void InlineEditor_TextChanged(object sender, EventArgs e)
+        {
+            if (selectedTextLabel != null)
+            {
+                selectedTextLabel.Content = inlineEditor.Text;
+                inlineEditor.UpdateVerticalAlignment();
+            }
+        }
+
+        protected override void OnMouseDoubleClick(MouseEventArgs e)
+        {
+            base.OnMouseDoubleClick(e);
+
+            if (e.Button == MouseButtons.Left && selectedTextLabel != null)
+            {
+                int canvasX = (this.Width - LastCanvasWidth) / 2;
+                int canvasY = (this.Height - LastCanvasHeight) / 2;
+
+                float lX = canvasX + (selectedTextLabel.RelativeX * LastCanvasWidth);
+                float lY = canvasY + (selectedTextLabel.RelativeY * LastCanvasHeight);
+                float lW = selectedTextLabel.RelativeWidth * LastCanvasWidth;
+                float lH = selectedTextLabel.RelativeHeight * LastCanvasHeight;
+
+                RectangleF boundsRect = new RectangleF(lX, lY, lW, lH);
+
+                if (boundsRect.Contains(e.Location))
+                {
+                    isEditingText = true;
+                    UpdateInlineEditorPosition();
+                }
+            }
+        }
+
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            // Check if an arrow key was pressed (extracting key without modifiers)
             Keys keyCode = keyData & Keys.KeyCode;
 
+            // Object Nudging
             if (keyCode == Keys.Up || keyCode == Keys.Down || keyCode == Keys.Left || keyCode == Keys.Right)
             {
-                // Don't intercept arrow keys if actively typing inside a text label
-                if (SelectedTextLabel != null && this.Focused)
+                if (!inlineEditor.Focused)
                 {
-                    // Allow arrow navigation within text unless CTRL or SHIFT moves the whole object
-                }
+                    int step = (keyData & Keys.Shift) == Keys.Shift ? 10 : 2;
+                    int deltaX = 0;
+                    int deltaY = 0;
 
-                // Shift key increases step size from 2 units to 10 units
-                int step = (keyData & Keys.Shift) == Keys.Shift ? 10 : 2;
-                int deltaX = 0;
-                int deltaY = 0;
+                    switch (keyCode)
+                    {
+                        case Keys.Left: deltaX = -step; break;
+                        case Keys.Right: deltaX = step; break;
+                        case Keys.Up: deltaY = -step; break;
+                        case Keys.Down: deltaY = step; break;
+                    }
 
-                switch (keyCode)
-                {
-                    case Keys.Left: deltaX = -step; break;
-                    case Keys.Right: deltaX = step; break;
-                    case Keys.Up: deltaY = -step; break;
-                    case Keys.Down: deltaY = step; break;
-                }
-
-                if (NudgeSelectedObject(deltaX, deltaY))
-                {
-                    return true; // Key handeled
+                    if (NudgeSelectedObject(deltaX, deltaY))
+                    {
+                        return true;
+                    }
                 }
             }
 
-            if (keyData == Keys.Delete)
+            if (keyData == Keys.Delete && !inlineEditor.Focused)
             {
-                if (SelectedTextLabel != null || SelectedItem != null)
+                if (SelectedItem != null)
                 {
                     SelectedItem = null;
                     SelectedTextLabel = null;
@@ -123,16 +250,10 @@ namespace VideoEditor.Controls
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
-        protected override bool IsInputKey(Keys keyData)
-        {
-            if (SelectedTextLabel != null) return true;
-            return base.IsInputKey(keyData);
-        }
         private bool NudgeSelectedObject(int deltaX, int deltaY)
         {
             if (LastCanvasWidth <= 0 || LastCanvasHeight <= 0) return false;
 
-            // 1. Move Selected Text Label
             if (SelectedTextLabel != null)
             {
                 var label = SelectedTextLabel;
@@ -156,11 +277,11 @@ namespace VideoEditor.Controls
                 };
 
                 UndoRedoManager?.ExecuteCommand(new TransformTextCommand(label, oldState, newState));
+                UpdateInlineEditorPosition();
                 this.Invalidate();
                 return true;
             }
 
-            // 2. Move Selected Blur Overlay
             if (SelectedItem?.Type == MediaType.Blur && SelectedItem.BlurData != null)
             {
                 var blur = SelectedItem.BlurData;
@@ -189,7 +310,6 @@ namespace VideoEditor.Controls
                 return true;
             }
 
-            // 3. Move Selected Image Item
             if (SelectedItem?.Type == MediaType.Image)
             {
                 var item = SelectedItem;
@@ -217,32 +337,6 @@ namespace VideoEditor.Controls
             }
 
             return false;
-        }
-
-        protected override void OnKeyPress(KeyPressEventArgs e)
-        {
-            base.OnKeyPress(e);
-            if (SelectedTextLabel != null)
-            {
-                if (e.KeyChar == (char)Keys.Back)
-                {
-                    if (SelectedTextLabel.Content.Length > 0)
-                    {
-                        SelectedTextLabel.Content = SelectedTextLabel.Content.Substring(0, SelectedTextLabel.Content.Length - 1);
-                        this.Invalidate();
-                    }
-                }
-                else if (e.KeyChar == (char)Keys.Enter || e.KeyChar == '\r')
-                {
-                    SelectedTextLabel.Content += Environment.NewLine;
-                    this.Invalidate();
-                }
-                else if (!char.IsControl(e.KeyChar))
-                {
-                    SelectedTextLabel.Content += e.KeyChar;
-                    this.Invalidate();
-                }
-            }
         }
 
         public void RenderFrame(List<MediaItem> items, double timePosition)
@@ -329,7 +423,8 @@ namespace VideoEditor.Controls
                             {
                                 if (localTime >= label.StartTime && localTime <= label.StartTime + label.Duration)
                                 {
-                                    DrawTextLabelWithSelection(g, label, canvasX, canvasY, canvasWidth, canvasHeight);
+                                    bool isSelectedText = (label == SelectedTextLabel);
+                                    DrawTextLabelWithSelection(g, label, canvasX, canvasY, canvasWidth, canvasHeight, isSelectedText);
                                 }
                             }
                         }
@@ -347,7 +442,8 @@ namespace VideoEditor.Controls
 
                 foreach (var textItem in activeTextItems)
                 {
-                    DrawTextLabelWithSelection(g, textItem.TextData, canvasX, canvasY, canvasWidth, canvasHeight);
+                    bool isSelectedText = (textItem.TextData == SelectedTextLabel);
+                    DrawTextLabelWithSelection(g, textItem.TextData, canvasX, canvasY, canvasWidth, canvasHeight, isSelectedText);
                 }
             }
             else
@@ -384,7 +480,6 @@ namespace VideoEditor.Controls
                     g.DrawRectangle(pen, originX, originY, baseW, baseH);
                 }
 
-                // Draw resize handle in bottom-right corner
                 g.FillRectangle(Brushes.Cyan, originX + baseW - 6, originY + baseH - 6, 12, 12);
             }
         }
@@ -407,22 +502,31 @@ namespace VideoEditor.Controls
             g.FillRectangle(Brushes.Magenta, drawX + drawW - 6, drawY + drawH - 6, 12, 12);
         }
 
-        private void DrawTextLabelWithSelection(Graphics g, TextLabel label, int canvasX, int canvasY, int canvasWidth, int canvasHeight)
+        private void DrawTextLabelWithSelection(Graphics g, TextLabel label, int canvasX, int canvasY, int canvasWidth, int canvasHeight, bool isSelected)
         {
-            VideoRenderHelper.DrawTextLabel(g, label, canvasX, canvasY, canvasWidth, canvasHeight);
-
-            if (label == SelectedTextLabel)
+            // Render text canvas graphics when not actively editing
+            if (!isSelected || !inlineEditor.Visible)
             {
-                float drawX = canvasX + (label.RelativeX * canvasWidth);
-                float drawY = canvasY + (label.RelativeY * canvasHeight);
-                float drawW = Math.Max(label.RelativeWidth * canvasWidth, 50);
-                float drawH = Math.Max(label.RelativeHeight * canvasHeight, 30);
+                VideoRenderHelper.DrawTextLabel(g, label, canvasX, canvasY, canvasWidth, canvasHeight);
+            }
+
+            float drawX = canvasX + (label.RelativeX * canvasWidth);
+            float drawY = canvasY + (label.RelativeY * canvasHeight);
+            float drawW = Math.Max(label.RelativeWidth * canvasWidth, 50);
+            float drawH = Math.Max(label.RelativeHeight * canvasHeight, 30);
+
+            if (isSelected)
+            {
+                // Inflate rectangle by 2px so the border draws outside the inlineEditor bounds
+                RectangleF borderRect = new RectangleF(drawX - 2, drawY - 2, drawW + 4, drawH + 4);
 
                 using (var pen = new Pen(Color.Cyan, 2) { DashStyle = DashStyle.Dash })
                 {
-                    g.DrawRectangle(pen, drawX, drawY, drawW, drawH);
+                    g.DrawRectangle(pen, borderRect.X, borderRect.Y, borderRect.Width, borderRect.Height);
                 }
-                g.FillRectangle(Brushes.Cyan, drawX + drawW - 6, drawY + drawH - 6, 12, 12);
+
+                // Draw resize handle at the bottom-right corner
+                g.FillRectangle(Brushes.Cyan, borderRect.Right - 6, borderRect.Bottom - 6, 12, 12);
             }
         }
 
@@ -432,24 +536,26 @@ namespace VideoEditor.Controls
 
             this.Focus();
 
+            // Close active text editor if clicking outside the inline editor bounds
+            if (isEditingText && !inlineEditor.Bounds.Contains(e.Location))
+            {
+                isEditingText = false;
+                inlineEditor.Visible = false;
+                this.Invalidate();
+            }
+
             int canvasX = (this.Width - LastCanvasWidth) / 2;
             int canvasY = (this.Height - LastCanvasHeight) / 2;
 
             int selectedTrack = TimelineRef?.SelectedTrackIndex ?? -1;
             var timelineSelectedItem = TimelineRef?.SelectedItem;
 
-            SelectedTextLabel = null;
-            selectedPreviewItem = null;
-
             var activeItems = allFrameItems
                 .Where(item => !IsItemLocked(item) &&
                                currentTimePosition >= item.StartTime &&
                                currentTimePosition < item.StartTime + item.Duration)
-                // 1. PRIMARY: Selected timeline item or active track gets first priority
                 .OrderByDescending(item => item == timelineSelectedItem || item.TrackIndex == selectedTrack)
-                // 2. SECONDARY: Higher track numbers draw on top, so check them first
                 .ThenByDescending(item => item.TrackIndex)
-                // 3. TIE-BREAKER: If on the same track, prioritize Text > Blur > Image
                 .ThenByDescending(item => item.Type switch
                 {
                     MediaType.Text => 3,
@@ -474,8 +580,16 @@ namespace VideoEditor.Controls
 
                     if (handleRect.Contains(e.Location) || boundsRect.Contains(e.Location))
                     {
-                        SelectedItem = item;
-                        SelectedTextLabel = label;
+                        if (selectedTextLabel != label)
+                        {
+                            SelectedItem = item;
+                            selectedTextLabel = label;
+                            selectedPreviewItem = null;
+                            isEditingText = false;
+                            inlineEditor.Visible = false;
+                            TextLabelSelected?.Invoke(label);
+                        }
+
                         isResizingText = handleRect.Contains(e.Location);
                         isDraggingText = !isResizingText;
                         lastMousePos = e.Location;
@@ -488,7 +602,6 @@ namespace VideoEditor.Controls
                             RelativeHeight = label.RelativeHeight
                         };
 
-                        TextLabelSelected?.Invoke(label);
                         this.Invalidate();
                         return;
                     }
@@ -508,6 +621,9 @@ namespace VideoEditor.Controls
                     {
                         SelectedItem = item;
                         selectedPreviewItem = item;
+                        selectedTextLabel = null;
+                        isEditingText = false;
+                        inlineEditor.Visible = false;
                         isResizingBlur = handleRect.Contains(e.Location);
                         isDraggingBlur = !isResizingBlur;
                         lastMousePos = e.Location;
@@ -545,43 +661,9 @@ namespace VideoEditor.Controls
                         {
                             selectedPreviewItem = item;
                             SelectedItem = item;
-                            isResizingImage = handleRect.Contains(e.Location);
-                            isDraggingImage = !isResizingImage;
-                            lastMousePos = e.Location;
-
-                            initialImageTransform = new ImageTransformState
-                            {
-                                PositionX = item.PositionX,
-                                PositionY = item.PositionY,
-                                Scale = item.Scale
-                            };
-
-                            this.Invalidate();
-                            return;
-                        }
-                    }
-                }
-                else if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath))
-                {
-                    if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
-                    {
-                        float scale = Math.Max((float)LastCanvasWidth / img.Width, (float)LastCanvasHeight / img.Height) * item.Scale;
-                        int baseW = (int)(img.Width * scale);
-                        int baseH = (int)(img.Height * scale);
-
-                        float posX = item.PositionX * ((float)LastCanvasWidth / 1080f);
-                        float posY = item.PositionY * ((float)LastCanvasHeight / 1920f);
-
-                        int originX = canvasX + (LastCanvasWidth - baseW) / 2 + (int)posX;
-                        int originY = canvasY + (LastCanvasHeight - baseH) / 2 + (int)posY;
-
-                        RectangleF handleRect = new RectangleF(originX + baseW - 10, originY + baseH - 10, 20, 20);
-                        RectangleF imageBounds = new RectangleF(originX, originY, baseW, baseH);
-
-                        if (handleRect.Contains(e.Location) || imageBounds.Contains(e.Location))
-                        {
-                            selectedPreviewItem = item;
-                            SelectedItem = item;
+                            selectedTextLabel = null;
+                            isEditingText = false;
+                            inlineEditor.Visible = false;
                             isResizingImage = handleRect.Contains(e.Location);
                             isDraggingImage = !isResizingImage;
                             lastMousePos = e.Location;
@@ -600,6 +682,11 @@ namespace VideoEditor.Controls
                 }
             }
 
+            SelectedItem = null;
+            selectedPreviewItem = null;
+            selectedTextLabel = null;
+            isEditingText = false;
+            inlineEditor.Visible = false;
             TextLabelSelected?.Invoke(null);
             this.Invalidate();
         }
@@ -613,11 +700,15 @@ namespace VideoEditor.Controls
                 UpdateHoverCursor(e.Location);
                 return;
             }
+
             int deltaX = e.X - lastMousePos.X;
             int deltaY = e.Y - lastMousePos.Y;
 
             if (isResizingText && selectedTextLabel != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
+                // Hide editor while dragging to prevent flicker
+                inlineEditor.Visible = false;
+
                 float currentW = selectedTextLabel.RelativeWidth * LastCanvasWidth;
                 float currentH = selectedTextLabel.RelativeHeight * LastCanvasHeight;
 
@@ -630,6 +721,10 @@ namespace VideoEditor.Controls
             else if (isDraggingText && selectedTextLabel != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
                 this.Cursor = Cursors.Hand;
+
+                // Hide editor while dragging to prevent flicker
+                inlineEditor.Visible = false;
+
                 float currentX = selectedTextLabel.RelativeX * LastCanvasWidth;
                 float currentY = selectedTextLabel.RelativeY * LastCanvasHeight;
 
@@ -666,21 +761,19 @@ namespace VideoEditor.Controls
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
-            else if (isDraggingImage && selectedPreviewItem != null)
+            else if (isResizingImage && selectedPreviewItem != null)
             {
-                this.Cursor = Cursors.Hand;
-                selectedPreviewItem.PositionX += deltaX * (1080f / LastCanvasWidth);
-                selectedPreviewItem.PositionY += deltaY * (1920f / LastCanvasHeight);
+                float scaleDelta = 1.0f + (deltaY * -0.005f);
+                selectedPreviewItem.Scale = Math.Clamp(selectedPreviewItem.Scale * scaleDelta, 0.1f, 5.0f);
                 lastMousePos = e.Location;
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
             }
-            else if (isResizingImage && selectedPreviewItem != null)
+            else if (isDraggingImage && selectedPreviewItem != null && LastCanvasWidth > 0 && LastCanvasHeight > 0)
             {
-                // Uniform scale adjustment based on drag distance
-                float deltaScale = (deltaX + deltaY) * 0.005f;
-                selectedPreviewItem.Scale = Math.Clamp(selectedPreviewItem.Scale + deltaScale, 0.1f, 10.0f);
-
+                this.Cursor = Cursors.Hand;
+                selectedPreviewItem.PositionX += deltaX * (1080f / LastCanvasWidth);
+                selectedPreviewItem.PositionY += deltaY * (1920f / LastCanvasHeight);
                 lastMousePos = e.Location;
                 ItemTransformChanged?.Invoke();
                 this.Invalidate();
@@ -691,6 +784,13 @@ namespace VideoEditor.Controls
         {
             this.Cursor = Cursors.Default;
             CommitTransformCommand();
+
+            // Re-enable inline editor if currently in editing mode
+            if (selectedTextLabel != null && (isDraggingText || isResizingText) && isEditingText)
+            {
+                UpdateInlineEditorPosition();
+            }
+
             isResizingImage = false;
             isDraggingImage = false;
             isDraggingText = false;
@@ -797,6 +897,7 @@ namespace VideoEditor.Controls
                 this.Invalidate();
             }
         }
+
         private void UpdateHoverCursor(Point mousePos)
         {
             int canvasX = (this.Width - LastCanvasWidth) / 2;
@@ -821,7 +922,6 @@ namespace VideoEditor.Controls
 
             foreach (var item in activeItems)
             {
-                // Check Text Overlays
                 if (item.Type == MediaType.Text && item.TextData != null)
                 {
                     var label = item.TextData;
@@ -844,7 +944,6 @@ namespace VideoEditor.Controls
                         return;
                     }
                 }
-                // Check Blur Overlays
                 else if (item.Type == MediaType.Blur && item.BlurData != null)
                 {
                     var blur = item.BlurData;
@@ -867,7 +966,6 @@ namespace VideoEditor.Controls
                         return;
                     }
                 }
-                // Check Image Overlays
                 else if (item.Type == MediaType.Image && !string.IsNullOrEmpty(item.FilePath))
                 {
                     if (imageCache.TryGetValue(item.FilePath, out Image img) && img != null)
@@ -899,8 +997,89 @@ namespace VideoEditor.Controls
                 }
             }
 
-            // Default cursor when hovering empty canvas space
             this.Cursor = Cursors.Default;
+        }
+    }
+
+    public class TransparentTextBox : TextBox
+    {
+        private const int EM_SETRECT = 0xB3;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref RECT lParam);
+
+        public TransparentTextBox()
+        {
+            SetStyle(ControlStyles.SupportsTransparentBackColor, true);
+            SetStyle(ControlStyles.Opaque, false);
+            SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
+            SetStyle(ControlStyles.AllPaintingInWmPaint, true);
+            BackColor = Color.Transparent;
+            Multiline = true;
+            BorderStyle = BorderStyle.None;
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x20; // WS_EX_TRANSPARENT
+                return cp;
+            }
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs pevent)
+        {
+            // Prevent background repaint flicker
+        }
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            UpdateVerticalAlignment();
+        }
+
+        protected override void OnTextChanged(EventArgs e)
+        {
+            base.OnTextChanged(e);
+            UpdateVerticalAlignment();
+        }
+
+        public void UpdateVerticalAlignment()
+        {
+            if (!IsHandleCreated || ClientRectangle.Width <= 0 || ClientRectangle.Height <= 0)
+                return;
+
+            // Calculate total formatted text height
+            Size textSize = TextRenderer.MeasureText(
+                this.Text,
+                this.Font,
+                new Size(ClientRectangle.Width, int.MaxValue),
+                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl
+            );
+
+            // Calculate top padding needed to center text vertically
+            int topPadding = Math.Max(0, (ClientRectangle.Height - textSize.Height) / 2);
+
+            RECT rect = new RECT
+            {
+                Left = 0,
+                Top = topPadding,
+                Right = ClientRectangle.Width,
+                Bottom = ClientRectangle.Height
+            };
+
+            SendMessage(this.Handle, EM_SETRECT, IntPtr.Zero, ref rect);
         }
     }
 }
