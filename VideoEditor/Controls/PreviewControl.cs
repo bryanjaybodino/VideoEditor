@@ -763,7 +763,7 @@ namespace VideoEditor.Controls
             }
             else if (isResizingImage && selectedPreviewItem != null)
             {
-                float scaleDelta = 1.0f + (deltaY * -0.005f);
+                float scaleDelta = 1.0f + (deltaY * 0.005f);
                 selectedPreviewItem.Scale = Math.Clamp(selectedPreviewItem.Scale * scaleDelta, 0.1f, 5.0f);
                 lastMousePos = e.Location;
                 ItemTransformChanged?.Invoke();
