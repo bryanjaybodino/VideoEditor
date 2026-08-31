@@ -520,6 +520,8 @@ namespace VideoEditor
 
         private async Task ExportVideoAsync()
         {
+            SaveProjectState();
+
             PausePlayback();
 
             using (var sfd = new SaveFileDialog { Filter = "MP4 Video|*.mp4", DefaultExt = ".mp4" })
